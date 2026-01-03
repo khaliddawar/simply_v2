@@ -1,25 +1,6 @@
 # TubeVibe Library - Dockerfile
-# Multi-stage build: Node.js for dashboard, Python for backend
+# Simple Python backend deployment
 
-# Stage 1: Build the dashboard
-FROM node:20-alpine AS dashboard-builder
-
-WORKDIR /dashboard
-
-# Copy dashboard source
-COPY dashboard/soft-ui-chat/package*.json ./
-RUN npm ci
-
-COPY dashboard/soft-ui-chat/ ./
-
-# Set production API URL (will use relative path since served from same origin)
-ENV VITE_API_URL=""
-
-# Build dashboard
-RUN npm run build
-
-
-# Stage 2: Python backend with dashboard
 FROM python:3.11-slim
 
 # Set environment variables
@@ -43,10 +24,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY backend/app ./app
-COPY backend/tests ./tests
-
-# Copy built dashboard from first stage
-COPY --from=dashboard-builder /dashboard/dist /app/static/dashboard
 
 # Expose port
 EXPOSE 8000
