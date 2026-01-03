@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir \"C:\\\\Users\\\\KhalidNoor\\\\Documents\\\\GitHub\\\\TubeVibe-Library\\\\dashboard\")",
+      "Bash(npm install:*)",
+      "Bash(dir:*)"
+    ]
+  }
+}

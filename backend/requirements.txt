@@ -1,0 +1,51 @@
+# TubeVibe Library Backend - Requirements
+
+# Web Framework
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# Database
+asyncpg==0.29.0
+sqlalchemy[asyncio]==2.0.25
+alembic==1.13.1
+
+# Authentication
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+httpx==0.26.0
+
+# Pinecone
+pinecone==3.0.0
+pinecone-plugin-assistant==0.1.0
+
+# Validation
+pydantic==2.5.3
+pydantic-settings==2.1.0
+email-validator==2.1.0
+
+# Utilities
+python-dotenv==1.0.0
+aiofiles==23.2.1
+
+# Email
+postmarker==1.0
+
+# LLM (Summarization)
+openai==1.12.0
+
+# Testing
+pytest==7.4.4
+pytest-asyncio==0.23.3
+pytest-cov==4.1.0
+httpx==0.26.0
+
+# Logging & Monitoring
+structlog==24.1.0
+sentry-sdk[fastapi]==1.39.1
+
+# Rate Limiting
+slowapi==0.1.9
+
+# CORS
+python-json-logger==2.0.7
