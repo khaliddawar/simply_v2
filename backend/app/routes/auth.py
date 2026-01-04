@@ -387,16 +387,8 @@ async def admin_reset_password(request: AdminResetPasswordRequest):
         # Hash new password
         new_password_hash = auth_service.hash_password(request.new_password)
 
-        # Update password in database
-        await auth_service.db.pool.execute(
-            """
-            UPDATE users
-            SET password_hash = $1, updated_at = NOW()
-            WHERE email = $2
-            """,
-            new_password_hash,
-            request.email
-        )
+        # Update password in database using update_user method
+        await auth_service.db.update_user(user["id"], {"password_hash": new_password_hash})
 
         return {
             "success": True,
