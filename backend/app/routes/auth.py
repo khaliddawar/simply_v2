@@ -459,11 +459,12 @@ async def fix_pinecone_metadata(
                     skipped_count += 1
                     continue
 
-                # Re-upload to Pinecone with correct user_id
+                # Re-upload to Pinecone with correct user_id and internal video_id
                 metadata = {
                     "channel_name": video_data.get("channel_name"),
                     "duration_seconds": video_data.get("duration_seconds"),
-                    "group_id": video_data.get("group_id")
+                    "group_id": video_data.get("group_id"),
+                    "youtube_id": video_data.get("youtube_id")  # Keep youtube_id for reference
                 }
 
                 result = await pinecone_service.upload_transcript(

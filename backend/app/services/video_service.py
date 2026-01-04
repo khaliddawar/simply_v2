@@ -80,19 +80,34 @@ class VideoService:
                     "message": "This video is already in your library"
                 }
 
-            # Prepare metadata for Pinecone
+            # Create video in database FIRST to get the internal UUID
+            video = await self.db.create_video(
+                user_id=user_id,
+                youtube_id=youtube_id,
+                title=title,
+                channel_name=channel_name,
+                duration_seconds=duration_seconds,
+                thumbnail_url=thumbnail_url,
+                pinecone_file_id=None,  # Will update after Pinecone upload
+                transcript_length=len(transcript),
+                transcript=transcript,
+                group_id=group_id
+            )
+
+            # Prepare metadata for Pinecone (include youtube_id for reference)
             metadata = {
                 "channel_name": channel_name,
                 "duration_seconds": duration_seconds,
-                "group_id": group_id
+                "group_id": group_id,
+                "youtube_id": youtube_id  # Keep youtube_id in metadata for reference
             }
 
-            # Upload transcript to Pinecone (if initialized)
-            pinecone_file_id = None
+            # Upload transcript to Pinecone using internal UUID (not youtube_id)
+            # This ensures filtering by video_id works correctly with frontend
             if self.pinecone.is_initialized():
                 pinecone_result = await self.pinecone.upload_transcript(
                     user_id=user_id,
-                    video_id=youtube_id,
+                    video_id=video["id"],  # Use internal UUID for consistent filtering
                     title=title,
                     transcript=transcript,
                     metadata=metadata
@@ -101,21 +116,10 @@ class VideoService:
                 if not pinecone_result.get("success"):
                     logger.warning(f"Failed to upload to Pinecone: {pinecone_result.get('error')}")
                 else:
+                    # Update video with pinecone_file_id
                     pinecone_file_id = pinecone_result.get("file_id")
-
-            # Create video in database (store transcript for summarization)
-            video = await self.db.create_video(
-                user_id=user_id,
-                youtube_id=youtube_id,
-                title=title,
-                channel_name=channel_name,
-                duration_seconds=duration_seconds,
-                thumbnail_url=thumbnail_url,
-                pinecone_file_id=pinecone_file_id,
-                transcript_length=len(transcript),
-                transcript=transcript,
-                group_id=group_id
-            )
+                    await self.db.update_video_pinecone_id(video["id"], pinecone_file_id)
+                    video["pinecone_file_id"] = pinecone_file_id
 
             logger.info(f"Created video {video['id']} for user {user_id}")
 
