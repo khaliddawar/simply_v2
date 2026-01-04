@@ -94,11 +94,18 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# CORS middleware
+# CORS middleware - allow specific origins for credentials support
+# Include localhost for dev and Railway production URL
+cors_origins = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://localhost:8000",
+    "https://simply-backend-production.up.railway.app",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
-    allow_credentials=settings.cors_allow_credentials,
+    allow_origins=cors_origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -118,7 +125,7 @@ async def health_check():
         "status": "healthy",
         "app": settings.app_name,
         "environment": settings.app_env,
-        "version": "1.0.4"  # Version to verify deployment
+        "version": "1.0.5"  # Version to verify deployment
     }
 
 
