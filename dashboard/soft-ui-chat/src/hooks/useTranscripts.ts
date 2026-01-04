@@ -5,6 +5,9 @@ import type {
   VideoListResponse,
   VideoWithTranscript,
   MoveVideoRequest,
+  VideoSummaryResponse,
+  EmailSummaryRequest,
+  EmailSummaryResponse,
 } from "@/types/api";
 
 /**
@@ -91,6 +94,41 @@ export function useMoveTranscript() {
     onSuccess: () => {
       // Invalidate all transcript list queries since group membership changed
       queryClient.invalidateQueries({ queryKey: transcriptKeys.lists() });
+    },
+  });
+}
+
+/**
+ * Hook to generate a summary for a video
+ * Calls the backend summarization service
+ */
+export function useGenerateSummary() {
+  return useMutation({
+    mutationFn: async (videoId: string): Promise<VideoSummaryResponse> => {
+      const { data } = await api.get(`/api/videos/${videoId}/summary`);
+      return data;
+    },
+  });
+}
+
+/**
+ * Hook to email a video summary
+ * Sends the summary to the specified email address
+ */
+export function useEmailSummary() {
+  return useMutation({
+    mutationFn: async ({
+      videoId,
+      request,
+    }: {
+      videoId: string;
+      request: EmailSummaryRequest;
+    }): Promise<EmailSummaryResponse> => {
+      const { data } = await api.post(
+        `/api/videos/${videoId}/email-summary`,
+        request
+      );
+      return data;
     },
   });
 }
