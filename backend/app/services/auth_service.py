@@ -50,13 +50,18 @@ class AuthService:
         self.db = db
         logger.info("Database service injected into Auth service")
 
+    def _truncate_password(self, password: str) -> str:
+        """Truncate password to 72 bytes (bcrypt limit)"""
+        # Encode to bytes and truncate to 72 bytes, then decode back
+        return password.encode('utf-8')[:72].decode('utf-8', errors='ignore')
+
     def hash_password(self, password: str) -> str:
-        """Hash a password using bcrypt"""
-        return self.pwd_context.hash(password)
+        """Hash a password using bcrypt (truncated to 72 bytes)"""
+        return self.pwd_context.hash(self._truncate_password(password))
 
     def verify_password(self, plain_password: str, hashed_password: str) -> bool:
-        """Verify a password against its hash"""
-        return self.pwd_context.verify(plain_password, hashed_password)
+        """Verify a password against its hash (truncated to 72 bytes)"""
+        return self.pwd_context.verify(self._truncate_password(plain_password), hashed_password)
 
     def create_access_token(
         self,
