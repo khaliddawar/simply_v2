@@ -141,7 +141,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const assistantMessage: Message = {
         id: generateId(),
         role: 'assistant',
-        content: data.response || data.message || '',
+        content: data.answer || data.response || data.message || '',
         citations: data.citations || [],
         timestamp: new Date(),
       };
