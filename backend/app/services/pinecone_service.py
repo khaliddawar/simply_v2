@@ -44,6 +44,7 @@ class PineconeService:
             from pinecone import Pinecone
 
             self.pc = Pinecone(api_key=self.api_key)
+            # In SDK v7+, assistant is built-in
             self.assistant = self.pc.assistant.Assistant(
                 assistant_name=self.assistant_name
             )
@@ -136,6 +137,7 @@ class PineconeService:
         user_id: str,
         query: str,
         group_id: Optional[str] = None,
+        video_id: Optional[str] = None,
         chat_history: Optional[List[Dict]] = None
     ) -> Dict[str, Any]:
         """
@@ -145,6 +147,7 @@ class PineconeService:
             user_id: User's unique ID
             query: Natural language question
             group_id: Optional group to search within
+            video_id: Optional specific video to search within
             chat_history: Optional conversation history for context
 
         Returns:
@@ -162,6 +165,10 @@ class PineconeService:
             # Add group filter if specified
             if group_id:
                 filter_dict["group_id"] = group_id
+
+            # Add video filter if specified (overrides group filter for specificity)
+            if video_id:
+                filter_dict["video_id"] = video_id
 
             # Build message list
             messages = []

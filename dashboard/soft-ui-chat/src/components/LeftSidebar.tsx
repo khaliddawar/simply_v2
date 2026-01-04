@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Home,
   Settings,
@@ -13,11 +13,14 @@ import {
 } from "lucide-react";
 import { useTranscripts, useMoveTranscript, useDeleteTranscript } from "@/hooks/useTranscripts";
 import { useGroups, useCreateGroup, useUpdateGroup, useDeleteGroup } from "@/hooks/useGroups";
+import { useSelectedTranscript } from "@/hooks/useSelectedTranscript";
+import { useChatStore } from "@/hooks/useChat";
 import { CreateGroupDialog } from "./CreateGroupDialog";
 import { TranscriptContextMenu } from "./TranscriptContextMenu";
 import { GroupContextMenu } from "./GroupContextMenu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
+import type { Video } from "@/types/api";
 
 /**
  * Helper to convert Tailwind color class to hex for API
@@ -102,8 +105,35 @@ export function LeftSidebar() {
   const { data: transcriptsData, isLoading: transcriptsLoading, error: transcriptsError } = useTranscripts();
   const { data: groups = [], isLoading: groupsLoading, error: groupsError } = useGroups();
 
+  // Selected transcript state management
+  const { selectedTranscript, setSelectedTranscript } = useSelectedTranscript();
+
+  // Chat video filter - sync video selection with RAG context
+  const setVideoFilter = useChatStore((state) => state.setVideoFilter);
+
   // Extract videos array from response, default to empty array
   const videos = transcriptsData?.videos ?? [];
+
+  // Auto-select the first (most recent) transcript when data loads
+  // Only auto-select if no transcript is currently selected
+  useEffect(() => {
+    if (!transcriptsLoading && videos.length > 0 && !selectedTranscript) {
+      // Videos are sorted by most recent first from API
+      setSelectedTranscript(videos[0]);
+      setVideoFilter(videos[0].id);  // Also set video context for RAG chat
+    }
+  }, [transcriptsLoading, videos, selectedTranscript, setSelectedTranscript, setVideoFilter]);
+
+  // Handle transcript selection
+  const handleSelectTranscript = (video: Video) => {
+    setSelectedTranscript(video);
+    setVideoFilter(video.id);  // Also set video context for RAG chat
+  };
+
+  // Check if a video is currently selected
+  const isSelected = (videoId: string): boolean => {
+    return selectedTranscript?.id === videoId;
+  };
 
   // Mutation hooks for data modifications
   const moveTranscriptMutation = useMoveTranscript();
@@ -325,8 +355,19 @@ export function LeftSidebar() {
                         onMove={handleMoveTranscript}
                         onDelete={handleDeleteTranscript}
                       >
-                        <div className="sidebar-item py-1.5 group cursor-pointer">
-                          <FileText className="w-3.5 h-3.5 text-muted-foreground group-hover:text-foreground" />
+                        <div
+                          onClick={() => handleSelectTranscript(video)}
+                          className={`sidebar-item py-1.5 group cursor-pointer ${
+                            isSelected(video.id)
+                              ? "bg-accent/50 text-accent-foreground"
+                              : ""
+                          }`}
+                        >
+                          <FileText className={`w-3.5 h-3.5 ${
+                            isSelected(video.id)
+                              ? "text-foreground"
+                              : "text-muted-foreground group-hover:text-foreground"
+                          }`} />
                           <div className="flex-1 min-w-0">
                             <p className="text-sm truncate">{video.title}</p>
                             <p className="text-xxs text-muted-foreground truncate">
@@ -406,8 +447,19 @@ export function LeftSidebar() {
                             onMove={handleMoveTranscript}
                             onDelete={handleDeleteTranscript}
                           >
-                            <div className="sidebar-item py-1.5 group cursor-pointer">
-                              <PlayCircle className="w-3.5 h-3.5 text-muted-foreground group-hover:text-foreground" />
+                            <div
+                              onClick={() => handleSelectTranscript(video)}
+                              className={`sidebar-item py-1.5 group cursor-pointer ${
+                                isSelected(video.id)
+                                  ? "bg-accent/50 text-accent-foreground"
+                                  : ""
+                              }`}
+                            >
+                              <PlayCircle className={`w-3.5 h-3.5 ${
+                                isSelected(video.id)
+                                  ? "text-foreground"
+                                  : "text-muted-foreground group-hover:text-foreground"
+                              }`} />
                               <div className="flex-1 min-w-0">
                                 <p className="text-sm truncate">{video.title}</p>
                                 <p className="text-xxs text-muted-foreground">

@@ -37,12 +37,16 @@ interface ChatState {
   // State
   messages: Message[];
   isLoading: boolean;
+  isStreaming: boolean;
   error: string | null;
   groupFilter: string | null;
+  videoFilter: string | null;  // Filter to specific video for RAG
 
   // Actions
   sendMessage: (query: string) => Promise<void>;
   setGroupFilter: (groupId: string | null) => void;
+  setVideoFilter: (videoId: string | null) => void;  // Set video context for chat
+  setStreaming: (streaming: boolean) => void;
   clearChat: () => void;
 }
 
@@ -76,8 +80,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   // Initial state
   messages: [],
   isLoading: false,
+  isStreaming: false,
   error: null,
   groupFilter: null,
+  videoFilter: null,
 
   /**
    * Send a message to the chat endpoint
@@ -103,7 +109,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }));
 
     try {
-      const { messages, groupFilter } = get();
+      const { messages, groupFilter, videoFilter } = get();
 
       // Prepare history payload (excluding the just-added user message for context)
       // We include all previous messages as context
@@ -114,12 +120,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
         query: string;
         history?: MessagePayload[];
         group_id?: string;
+        video_id?: string;
       } = {
         query: trimmedQuery,
         history,
       };
 
-      if (groupFilter) {
+      // Add filters - video filter takes priority for more specific context
+      if (videoFilter) {
+        payload.video_id = videoFilter;
+      } else if (groupFilter) {
         payload.group_id = groupFilter;
       }
 
@@ -136,10 +146,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
         timestamp: new Date(),
       };
 
-      // Add assistant message
+      // Add assistant message and start streaming animation
       set((state) => ({
         messages: [...state.messages, assistantMessage],
         isLoading: false,
+        isStreaming: true,
       }));
     } catch (error) {
       // Handle error
@@ -162,7 +173,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
    * Pass null to search across all videos
    */
   setGroupFilter: (groupId: string | null) => {
-    set({ groupFilter: groupId });
+    set({ groupFilter: groupId, videoFilter: null });  // Clear video filter when setting group
+  },
+
+  /**
+   * Set the video filter for scoped searches to a specific video
+   * Pass null to search across all videos (or current group if set)
+   */
+  setVideoFilter: (videoId: string | null) => {
+    set({ videoFilter: videoId });
+  },
+
+  /**
+   * Set the streaming state
+   * Used to track when message content is being animated
+   */
+  setStreaming: (streaming: boolean) => {
+    set({ isStreaming: streaming });
   },
 
   /**
@@ -173,6 +200,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       messages: [],
       error: null,
       isLoading: false,
+      isStreaming: false,
     });
   },
 }));

@@ -15,12 +15,14 @@ class SearchRequest(BaseModel):
     """Search request schema"""
     query: str
     group_id: Optional[str] = None
+    video_id: Optional[str] = None  # Filter to specific video
 
 
 class ChatRequest(BaseModel):
     """Chat request with history"""
     query: str
     group_id: Optional[str] = None
+    video_id: Optional[str] = None  # Filter to specific video
     history: Optional[List[Dict[str, str]]] = None
 
 
@@ -58,7 +60,8 @@ async def search_knowledge(
     result = await pinecone_service.search_knowledge(
         user_id=user_id,
         query=request.query,
-        group_id=request.group_id
+        group_id=request.group_id,
+        video_id=request.video_id
     )
 
     if not result.get("success"):
@@ -86,6 +89,7 @@ async def chat_with_knowledge(
         user_id=user_id,
         query=request.query,
         group_id=request.group_id,
+        video_id=request.video_id,
         chat_history=request.history
     )
 
