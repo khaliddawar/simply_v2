@@ -444,6 +444,19 @@ class DatabaseService:
             )
             return True
 
+    async def update_video_pinecone_id(self, video_id: str, pinecone_file_id: str) -> bool:
+        """Update video's Pinecone file ID after re-upload"""
+        async with self.get_session() as session:
+            await session.execute(
+                update(VideoModel)
+                .where(VideoModel.id == uuid.UUID(video_id))
+                .values(
+                    pinecone_file_id=pinecone_file_id,
+                    updated_at=datetime.utcnow()
+                )
+            )
+            return True
+
     def _video_to_dict(self, video: VideoModel, include_transcript: bool = False) -> Dict[str, Any]:
         """Convert video model to dictionary"""
         result = {

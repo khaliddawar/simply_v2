@@ -300,6 +300,25 @@ class VideoService:
             logger.error(f"Error moving video to group: {e}")
             return {"success": False, "error": str(e)}
 
+    async def update_video_pinecone_id(
+        self,
+        video_id: str,
+        pinecone_file_id: str
+    ) -> Dict[str, Any]:
+        """
+        Update a video's Pinecone file ID.
+        Used when re-uploading transcripts to Pinecone.
+        """
+        if not self.db:
+            return {"success": False, "error": "Database service not available"}
+
+        try:
+            await self.db.update_video_pinecone_id(video_id, pinecone_file_id)
+            return {"success": True}
+        except Exception as e:
+            logger.error(f"Error updating Pinecone file ID: {e}")
+            return {"success": False, "error": str(e)}
+
 
 # Singleton instance
 _video_service: Optional[VideoService] = None

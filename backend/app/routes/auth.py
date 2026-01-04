@@ -404,3 +404,99 @@ async def admin_reset_password(request: AdminResetPasswordRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to reset password: {str(e)}")
+
+
+@router.post("/admin/fix-pinecone-metadata")
+async def fix_pinecone_metadata(
+    user_id: str = Depends(get_current_user_id)
+):
+    """
+    Re-upload all user's videos to Pinecone with correct user_id metadata.
+    This fixes transcripts that were uploaded with TEST_MODE user_id.
+    """
+    from app.services.pinecone_service import get_pinecone_service
+    from app.services.video_service import get_video_service
+
+    auth_service = get_auth_service()
+    pinecone_service = get_pinecone_service()
+    video_service = get_video_service()
+
+    if not auth_service.db:
+        raise HTTPException(status_code=500, detail="Database not available")
+
+    if not pinecone_service.is_initialized():
+        raise HTTPException(status_code=500, detail="Pinecone service not initialized")
+
+    try:
+        # Get all videos for the current user (without transcripts first for listing)
+        videos_result = await video_service.list_videos(user_id, per_page=100)
+        if not videos_result.get("success"):
+            raise HTTPException(status_code=400, detail=videos_result.get("error"))
+
+        videos = videos_result.get("videos", [])
+        updated_count = 0
+        skipped_count = 0
+        errors = []
+
+        for video in videos:
+            try:
+                # Fetch each video with transcript included
+                video_with_transcript = await video_service.get_video(
+                    user_id=user_id,
+                    video_id=video["id"],
+                    include_transcript=True
+                )
+
+                if not video_with_transcript.get("success"):
+                    errors.append(f"{video['title']}: Failed to fetch video details")
+                    continue
+
+                video_data = video_with_transcript.get("video", {})
+                transcript = video_data.get("transcript")
+
+                # Skip videos without transcripts
+                if not transcript:
+                    skipped_count += 1
+                    continue
+
+                # Re-upload to Pinecone with correct user_id
+                metadata = {
+                    "channel_name": video_data.get("channel_name"),
+                    "duration_seconds": video_data.get("duration_seconds"),
+                    "group_id": video_data.get("group_id")
+                }
+
+                result = await pinecone_service.upload_transcript(
+                    user_id=user_id,  # Use the CORRECT user_id
+                    video_id=video_data["id"],
+                    title=video_data["title"],
+                    transcript=transcript,
+                    metadata=metadata
+                )
+
+                if result.get("success"):
+                    # Update the pinecone_file_id in database
+                    await video_service.update_video_pinecone_id(
+                        video_data["id"],
+                        result["file_id"]
+                    )
+                    updated_count += 1
+                else:
+                    errors.append(f"{video_data['title']}: {result.get('error')}")
+
+            except Exception as e:
+                errors.append(f"{video['title']}: {str(e)}")
+
+        return {
+            "success": True,
+            "message": f"Re-uploaded {updated_count} transcripts to Pinecone with correct user_id",
+            "videos_updated": updated_count,
+            "videos_skipped": skipped_count,
+            "total_videos": len(videos),
+            "errors": errors if errors else None
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fix Pinecone metadata: {str(e)}")
