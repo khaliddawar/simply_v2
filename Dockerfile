@@ -48,12 +48,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy backend application code
 COPY backend/app ./app
 
+# Copy start script and make executable
+COPY backend/start.sh ./start.sh
+RUN chmod +x ./start.sh
+
 # Copy built dashboard from first stage
 COPY --from=dashboard-builder /dashboard/dist ./static/dashboard
 
 # Expose port (Railway uses dynamic PORT)
 EXPOSE 8000
 
-# Run the application - use PORT env var for Railway compatibility
-# Use exec form with explicit shell for proper variable expansion
-CMD ["/bin/sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Run the application using start script
+CMD ["./start.sh"]
