@@ -192,12 +192,16 @@ class VideoService:
             return {"success": False, "error": "Database service not available"}
 
         try:
+            logger.info(f"🔍 LIST_VIDEOS called - user_id: {user_id}, group_id: {group_id}")
+
             result = await self.db.list_videos(
                 user_id=user_id,
                 group_id=group_id,
                 offset=(page - 1) * per_page,
                 limit=per_page
             )
+
+            logger.info(f"📊 LIST_VIDEOS result - user_id: {user_id}, total: {result['total']}, videos_returned: {len(result['videos'])}")
 
             return {
                 "success": True,

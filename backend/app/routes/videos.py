@@ -85,6 +85,21 @@ async def list_videos(
     )
 
 
+@router.get("/debug/auth")
+async def debug_auth(user_id: str = Depends(get_current_user_id_optional)):
+    """
+    Debug endpoint to show current user ID and video count.
+    Helps diagnose authentication/data mismatches.
+    """
+    video_service = get_video_service()
+    result = await video_service.list_videos(user_id=user_id, page=1, per_page=1)
+    return {
+        "authenticated_user_id": user_id,
+        "video_count": result.get("total", 0),
+        "message": "If video_count is 0 but you saved videos, your user_id may differ between extension and dashboard"
+    }
+
+
 @router.get("/{video_id}", response_model=VideoWithTranscript)
 async def get_video(
     video_id: str,
