@@ -206,14 +206,17 @@ class AuthService:
             user = await self.db.get_user_by_email(email)
 
             if not user:
-                return {"success": False, "error": "Invalid email or password"}
+                logger.warning(f"Login attempt for non-existent email: {email}")
+                return {"success": False, "error": "No account found with this email. Please register first."}
 
             # Verify password
             if not user.get("password_hash"):
-                return {"success": False, "error": "Please login with Google"}
+                logger.info(f"User {email} has no password (Google OAuth user)")
+                return {"success": False, "error": "This account uses Google Sign-In. Please login with Google."}
 
             if not self.verify_password(password, user["password_hash"]):
-                return {"success": False, "error": "Invalid email or password"}
+                logger.warning(f"Invalid password attempt for: {email}")
+                return {"success": False, "error": "Incorrect password. Please try again."}
 
             # Generate access token
             access_token = self.create_access_token(user["id"])
