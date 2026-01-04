@@ -173,13 +173,15 @@ class PineconeService:
             # Build message list
             messages = []
 
-            # Add chat history if provided
+            # Add chat history if provided (filter out empty messages)
             if chat_history:
                 for msg in chat_history[-5:]:  # Keep last 5 messages for context
-                    messages.append(Message(
-                        role=msg.get("role", "user"),
-                        content=msg.get("content", "")
-                    ))
+                    content = msg.get("content", "").strip()
+                    if content:  # Only add non-empty messages
+                        messages.append(Message(
+                            role=msg.get("role", "user"),
+                            content=content
+                        ))
 
             # Add current query
             messages.append(Message(role="user", content=query))
