@@ -55,5 +55,5 @@ COPY --from=dashboard-builder /dashboard/dist ./static/dashboard
 EXPOSE 8000
 
 # Run the application - use PORT env var for Railway compatibility
-# Using shell form explicitly to ensure variable expansion
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Use exec form with explicit shell for proper variable expansion
+CMD ["/bin/sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
