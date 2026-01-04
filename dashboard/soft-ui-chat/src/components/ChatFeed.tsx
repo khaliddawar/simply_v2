@@ -1,9 +1,12 @@
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useCallback } from "react";
 import { MessageSquare, Trash2, Filter } from "lucide-react";
 import { useChat, type Message } from "@/hooks/useChat";
 import { useGroups } from "@/hooks/useGroups";
+import { useSelectedTranscript } from "@/hooks/useSelectedTranscript";
 import { ChatMessage } from "./ChatMessage";
 import { ChatInput } from "./ChatInput";
+import { TranscriptHeader } from "./TranscriptHeader";
+import { ThinkingIndicator } from "./ThinkingIndicator";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -52,28 +55,6 @@ function EmptyState() {
 }
 
 /**
- * Loading indicator for when assistant is thinking
- */
-function ThinkingIndicator() {
-  return (
-    <div className="flex gap-3 animate-fade-in">
-      <div className="flex-shrink-0 w-8 h-8 rounded-full bg-accent-purple/20 flex items-center justify-center">
-        <div className="flex gap-1">
-          <span className="w-1.5 h-1.5 bg-accent-purple rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-          <span className="w-1.5 h-1.5 bg-accent-purple rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-          <span className="w-1.5 h-1.5 bg-accent-purple rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
-        </div>
-      </div>
-      <div className="flex flex-col items-start">
-        <div className="rounded-2xl rounded-bl-sm bg-card border border-border/50 px-4 py-3">
-          <p className="text-sm text-muted-foreground">Searching your videos...</p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/**
  * Main chat feed component - RAG-powered chat interface
  *
  * Features:
@@ -87,10 +68,18 @@ export function ChatFeed() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Chat state from Zustand store
-  const { messages, isLoading, error, groupFilter, sendMessage, setGroupFilter, clearChat } = useChat();
+  const { messages, isLoading, isStreaming, error, groupFilter, sendMessage, setGroupFilter, setStreaming, clearChat } = useChat();
 
   // Groups for filter dropdown
   const { data: groups = [] } = useGroups();
+
+  // Selected transcript state
+  const { selectedTranscript } = useSelectedTranscript();
+
+  // Handle streaming completion
+  const handleStreamingComplete = useCallback(() => {
+    setStreaming(false);
+  }, [setStreaming]);
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -170,17 +159,32 @@ export function ChatFeed() {
         </div>
       </header>
 
+      {/* Transcript header - shown when a transcript is selected */}
+      {selectedTranscript && <TranscriptHeader />}
+
       {/* Messages area */}
       <div className="flex-1 overflow-y-auto px-4 py-4 scrollbar-hide">
         {messages.length === 0 && !isLoading ? (
           <EmptyState />
         ) : (
           <div className="space-y-4 max-w-3xl mx-auto">
-            {messages.map((message: Message) => (
-              <ChatMessage key={message.id} message={message} />
-            ))}
+            {messages.map((message: Message, index: number) => {
+              // Check if this is the last assistant message and streaming is active
+              const isLastMessage = index === messages.length - 1;
+              const isAssistant = message.role === 'assistant';
+              const shouldStream = isLastMessage && isAssistant && isStreaming;
 
-            {/* Loading indicator */}
+              return (
+                <ChatMessage
+                  key={message.id}
+                  message={message}
+                  isStreaming={shouldStream}
+                  onStreamingComplete={shouldStream ? handleStreamingComplete : undefined}
+                />
+              );
+            })}
+
+            {/* Loading indicator - shown while waiting for response */}
             {isLoading && <ThinkingIndicator />}
 
             {/* Scroll anchor */}

@@ -6,6 +6,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible';
+import { StreamingMessage } from '@/components/StreamingMessage';
 import type { Message, Citation } from '@/hooks/useChat';
 
 /**
@@ -14,6 +15,10 @@ import type { Message, Citation } from '@/hooks/useChat';
 interface ChatMessageProps {
   /** The message to display */
   message: Message;
+  /** Whether the message is currently being streamed/typed */
+  isStreaming?: boolean;
+  /** Callback when streaming animation completes */
+  onStreamingComplete?: () => void;
   /** Additional CSS classes */
   className?: string;
 }
@@ -120,9 +125,16 @@ function CitationsSection({ citations }: { citations: Citation[] }) {
  * - Assistant messages: left-aligned with AI icon and expandable citations
  * - Timestamp display
  * - Smooth fade-in animation
+ * - Streaming/typing animation for assistant responses
  */
-export function ChatMessage({ message, className }: ChatMessageProps) {
+export function ChatMessage({
+  message,
+  isStreaming = false,
+  onStreamingComplete,
+  className,
+}: ChatMessageProps) {
   const isUser = message.role === 'user';
+  const shouldStream = !isUser && isStreaming;
 
   return (
     <div
@@ -164,8 +176,18 @@ export function ChatMessage({ message, className }: ChatMessageProps) {
               : 'bg-card border border-border/50 text-foreground rounded-bl-sm'
           )}
         >
-          <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">
-            {message.content}
+          <p className="text-sm leading-relaxed">
+            {shouldStream ? (
+              <StreamingMessage
+                content={message.content}
+                onComplete={onStreamingComplete}
+                typingSpeed={12}
+              />
+            ) : (
+              <span className="whitespace-pre-wrap break-words">
+                {message.content}
+              </span>
+            )}
           </p>
         </div>
 
