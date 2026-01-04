@@ -295,3 +295,57 @@ async def refresh_token(
         "token_type": "bearer",
         "expires_in": auth_service.access_token_expire_minutes * 60
     }
+
+
+@router.post("/admin/fix-test-user-videos")
+async def fix_test_user_videos(
+    user_id: str = Depends(get_current_user_id)
+):
+    """
+    One-time admin endpoint to reassign videos from test user to current user.
+    This fixes videos saved with TEST_MODE enabled.
+
+    IMPORTANT: Only run this once, then remove this endpoint.
+    """
+    auth_service = get_auth_service()
+
+    if not auth_service.db:
+        raise HTTPException(status_code=500, detail="Database not available")
+
+    TEST_USER_ID = "00000000-0000-0000-0000-000000000001"
+
+    try:
+        # Count videos with test user ID
+        count_result = await auth_service.db.pool.fetchrow(
+            "SELECT COUNT(*) as count FROM videos WHERE user_id = $1",
+            TEST_USER_ID
+        )
+        test_video_count = count_result["count"] if count_result else 0
+
+        if test_video_count == 0:
+            return {
+                "success": True,
+                "message": "No videos found with test user ID",
+                "videos_updated": 0
+            }
+
+        # Update videos from test user to current authenticated user
+        await auth_service.db.pool.execute(
+            """
+            UPDATE videos
+            SET user_id = $1, updated_at = NOW()
+            WHERE user_id = $2
+            """,
+            user_id,
+            TEST_USER_ID
+        )
+
+        return {
+            "success": True,
+            "message": f"Successfully reassigned {test_video_count} videos from test user to your account",
+            "videos_updated": test_video_count,
+            "new_user_id": user_id
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fix videos: {str(e)}")
