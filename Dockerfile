@@ -1,6 +1,29 @@
 # TubeVibe Library - Dockerfile
-# Simple Python backend deployment
+# Multi-stage build: Node.js for dashboard, Python for backend
 
+# ============================================
+# Stage 1: Build the React Dashboard
+# ============================================
+FROM node:20-alpine AS dashboard-builder
+
+WORKDIR /dashboard
+
+# Copy package files first for better caching
+COPY dashboard/soft-ui-chat/package*.json ./
+RUN npm ci
+
+# Copy dashboard source
+COPY dashboard/soft-ui-chat/ ./
+
+# Set production API URL (empty = relative path since served from same origin)
+ENV VITE_API_URL=""
+
+# Build dashboard
+RUN npm run build
+
+# ============================================
+# Stage 2: Python Backend with Dashboard
+# ============================================
 FROM python:3.11-slim
 
 # Set environment variables
@@ -22,15 +45,15 @@ RUN apt-get update && apt-get install -y \
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy backend application code
 COPY backend/app ./app
 
-# Expose port
+# Copy built dashboard from first stage
+COPY --from=dashboard-builder /dashboard/dist ./static/dashboard
+
+# Expose port (Railway uses dynamic PORT)
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
-
-# Run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run the application - use PORT env var for Railway compatibility
+# Using shell form explicitly to ensure variable expansion
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
