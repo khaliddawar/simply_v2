@@ -132,12 +132,15 @@ class DatabaseService:
             return
 
         try:
-            # Create async engine
+            # Create async engine with connection pool resilience settings
             self.engine = create_async_engine(
                 self.database_url,
                 echo=os.getenv("DEBUG", "false").lower() == "true",
                 pool_size=5,
-                max_overflow=10
+                max_overflow=10,
+                pool_pre_ping=True,  # Validates connections before use (prevents "connection closed")
+                pool_recycle=300,    # Recycle connections every 5 minutes
+                pool_timeout=30,     # Timeout for getting connection from pool
             )
 
             # Create session factory
@@ -363,6 +366,24 @@ class DatabaseService:
                 return None
 
             return self._video_to_dict(video, include_transcript=include_transcript)
+
+    async def get_video_by_youtube_id(
+        self, user_id: str, youtube_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Get video by YouTube ID for a specific user (for duplicate checking)"""
+        async with self.get_session() as session:
+            result = await session.execute(
+                select(VideoModel).where(
+                    VideoModel.youtube_id == youtube_id,
+                    VideoModel.user_id == uuid.UUID(user_id)
+                )
+            )
+            video = result.scalar_one_or_none()
+
+            if not video:
+                return None
+
+            return self._video_to_dict(video)
 
     async def list_videos(
         self,

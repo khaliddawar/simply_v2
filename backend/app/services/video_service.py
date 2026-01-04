@@ -69,6 +69,17 @@ class VideoService:
             return {"success": False, "error": "Database service not available"}
 
         try:
+            # Check if video already exists for this user
+            existing = await self.db.get_video_by_youtube_id(user_id, youtube_id)
+            if existing:
+                logger.info(f"Video {youtube_id} already exists for user {user_id}")
+                return {
+                    "success": True,
+                    "video": existing,
+                    "already_exists": True,
+                    "message": "This video is already in your library"
+                }
+
             # Prepare metadata for Pinecone
             metadata = {
                 "channel_name": channel_name,
