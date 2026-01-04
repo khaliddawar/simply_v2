@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { cn } from '@/lib/utils';
 
 /**
@@ -91,13 +92,15 @@ export function StreamingMessage({
   }, [content, typingSpeed, onComplete]);
 
   return (
-    <span className={cn('whitespace-pre-wrap break-words', className)}>
-      {displayedContent}
+    <div className={cn('relative', className)}>
+      <div className="prose prose-sm prose-invert max-w-none prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5 prose-headings:my-2 prose-strong:text-foreground prose-a:text-accent-blue">
+        <ReactMarkdown>{displayedContent}</ReactMarkdown>
+      </div>
       {/* Blinking cursor */}
       {showCursor && isTyping && (
-        <span className="inline-block w-0.5 h-4 ml-0.5 bg-foreground animate-pulse" />
+        <span className="inline-block w-0.5 h-4 ml-0.5 bg-foreground animate-pulse align-middle" />
       )}
-    </span>
+    </div>
   );
 }
 

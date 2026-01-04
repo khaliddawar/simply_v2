@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { Bot, User, ChevronDown, ChevronUp, FileText } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 import { cn } from '@/lib/utils';
 import {
   Collapsible,
@@ -176,19 +177,23 @@ export function ChatMessage({
               : 'bg-card border border-border/50 text-foreground rounded-bl-sm'
           )}
         >
-          <p className="text-sm leading-relaxed">
+          <div className="text-sm leading-relaxed">
             {shouldStream ? (
               <StreamingMessage
                 content={message.content}
                 onComplete={onStreamingComplete}
                 typingSpeed={12}
               />
-            ) : (
+            ) : isUser ? (
               <span className="whitespace-pre-wrap break-words">
                 {message.content}
               </span>
+            ) : (
+              <div className="prose prose-sm prose-invert max-w-none prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5 prose-headings:my-2 prose-strong:text-foreground prose-a:text-accent-blue">
+                <ReactMarkdown>{message.content}</ReactMarkdown>
+              </div>
             )}
-          </p>
+          </div>
         </div>
 
         {/* Citations (assistant only) */}

@@ -15,10 +15,10 @@ import { CitationCard } from './CitationCard';
  * CitationsPanel - Shows sources from the last search query
  */
 export function CitationsPanel() {
-  const { messages, groupFilter } = useChat();
+  const { messages, groupFilter, videoFilter } = useChat();
   const { totalVideos } = useLibraryStats();
   const { data: groups } = useGroups();
-  const { setSelectedTranscript } = useSelectedTranscript();
+  const { selectedTranscript, setSelectedTranscript } = useSelectedTranscript();
 
   // Get citations from the last assistant message
   const lastAssistantMessage = [...messages]
@@ -68,7 +68,11 @@ export function CitationsPanel() {
         <div className="flex items-center gap-2 text-xxs">
           <Search className="w-3 h-3 text-muted-foreground" />
           <span className="text-muted-foreground">Searching in:</span>
-          {currentGroup ? (
+          {videoFilter && selectedTranscript ? (
+            <span className="font-medium text-foreground truncate max-w-[140px]" title={selectedTranscript.title}>
+              {selectedTranscript.title}
+            </span>
+          ) : currentGroup ? (
             <span className="flex items-center gap-1">
               <span
                 className="w-2 h-2 rounded-full"
@@ -85,7 +89,7 @@ export function CitationsPanel() {
         <div className="flex items-center gap-2 text-xxs mt-1">
           <Filter className="w-3 h-3 text-muted-foreground" />
           <span className="text-muted-foreground">
-            {totalVideos} video{totalVideos !== 1 ? 's' : ''} indexed
+            {videoFilter ? '1 video' : `${totalVideos} video${totalVideos !== 1 ? 's' : ''}`} indexed
           </span>
         </div>
       </div>

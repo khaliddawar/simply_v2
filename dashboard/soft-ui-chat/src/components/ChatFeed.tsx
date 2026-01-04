@@ -68,7 +68,7 @@ export function ChatFeed() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Chat state from Zustand store
-  const { messages, isLoading, isStreaming, error, groupFilter, sendMessage, setGroupFilter, setStreaming, clearChat } = useChat();
+  const { messages, isLoading, isStreaming, error, groupFilter, videoFilter, sendMessage, setGroupFilter, setStreaming, clearChat } = useChat();
 
   // Groups for filter dropdown
   const { data: groups = [] } = useGroups();
@@ -118,31 +118,41 @@ export function ChatFeed() {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Group filter */}
+          {/* Filter indicator - shows video or group context */}
           <div className="flex items-center gap-2">
             <Filter className="w-4 h-4 text-muted-foreground" />
-            <Select
-              value={groupFilter || "all"}
-              onValueChange={handleGroupFilterChange}
-            >
-              <SelectTrigger className="w-[140px] h-8 text-xs">
-                <SelectValue placeholder="All videos" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All videos</SelectItem>
-                {groups.map((group) => (
-                  <SelectItem key={group.id} value={group.id}>
-                    <div className="flex items-center gap-2">
-                      <div
-                        className="w-2 h-2 rounded-full"
-                        style={{ backgroundColor: group.color }}
-                      />
-                      {group.name}
-                    </div>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {videoFilter && selectedTranscript ? (
+              // Video selected - show video indicator
+              <div className="h-8 px-3 flex items-center gap-2 bg-accent-purple/10 rounded-md border border-accent-purple/30">
+                <span className="text-xs font-medium text-accent-purple truncate max-w-[120px]">
+                  {selectedTranscript.title}
+                </span>
+              </div>
+            ) : (
+              // No video selected - show group filter
+              <Select
+                value={groupFilter || "all"}
+                onValueChange={handleGroupFilterChange}
+              >
+                <SelectTrigger className="w-[140px] h-8 text-xs">
+                  <SelectValue placeholder="All videos" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All videos</SelectItem>
+                  {groups.map((group) => (
+                    <SelectItem key={group.id} value={group.id}>
+                      <div className="flex items-center gap-2">
+                        <div
+                          className="w-2 h-2 rounded-full"
+                          style={{ backgroundColor: group.color }}
+                        />
+                        {group.name}
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
           </div>
 
           {/* Clear chat button */}
@@ -198,7 +208,9 @@ export function ChatFeed() {
         onSend={handleSend}
         isLoading={isLoading}
         placeholder={
-          groupFilter
+          videoFilter && selectedTranscript
+            ? `Ask about "${selectedTranscript.title.slice(0, 30)}${selectedTranscript.title.length > 30 ? '...' : ''}"...`
+            : groupFilter
             ? `Ask about videos in ${groups.find((g) => g.id === groupFilter)?.name || "this group"}...`
             : "Ask a question about your videos..."
         }
