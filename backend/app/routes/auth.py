@@ -307,6 +307,10 @@ async def fix_test_user_videos(
 
     IMPORTANT: Only run this once, then remove this endpoint.
     """
+    from sqlalchemy import select, update, func
+    from app.services.database_service import VideoModel
+    import uuid
+
     auth_service = get_auth_service()
 
     if not auth_service.db:
@@ -315,30 +319,30 @@ async def fix_test_user_videos(
     TEST_USER_ID = "00000000-0000-0000-0000-000000000001"
 
     try:
-        # Count videos with test user ID
-        count_result = await auth_service.db.pool.fetchrow(
-            "SELECT COUNT(*) as count FROM videos WHERE user_id = $1",
-            TEST_USER_ID
-        )
-        test_video_count = count_result["count"] if count_result else 0
+        # Count and update videos using SQLAlchemy
+        async with auth_service.db.get_session() as session:
+            # Count videos with test user ID
+            count_result = await session.execute(
+                select(func.count()).select_from(VideoModel).where(
+                    VideoModel.user_id == uuid.UUID(TEST_USER_ID)
+                )
+            )
+            test_video_count = count_result.scalar() or 0
 
-        if test_video_count == 0:
-            return {
-                "success": True,
-                "message": "No videos found with test user ID",
-                "videos_updated": 0
-            }
+            if test_video_count == 0:
+                return {
+                    "success": True,
+                    "message": "No videos found with test user ID",
+                    "videos_updated": 0
+                }
 
-        # Update videos from test user to current authenticated user
-        await auth_service.db.pool.execute(
-            """
-            UPDATE videos
-            SET user_id = $1, updated_at = NOW()
-            WHERE user_id = $2
-            """,
-            user_id,
-            TEST_USER_ID
-        )
+            # Update videos from test user to current authenticated user
+            from datetime import datetime
+            await session.execute(
+                update(VideoModel)
+                .where(VideoModel.user_id == uuid.UUID(TEST_USER_ID))
+                .values(user_id=uuid.UUID(user_id), updated_at=datetime.utcnow())
+            )
 
         return {
             "success": True,
