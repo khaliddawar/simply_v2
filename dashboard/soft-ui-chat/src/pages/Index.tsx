@@ -24,12 +24,18 @@ function LoadingScreen() {
  *
  * Features:
  * - Authentication check on mount
+ * - OAuth callback handling (Google sign-in redirect)
  * - Shows LoginDialog if not authenticated
  * - Shows loading state while checking auth
  * - Main dashboard layout with sidebar, chat feed, and right panel
  */
 const Index = () => {
-  const { isAuthenticated, isLoading, token, fetchUser } = useAuth();
+  const { isAuthenticated, isLoading, token, fetchUser, handleOAuthCallback } = useAuth();
+
+  // Handle OAuth callback on mount (Google sign-in redirect)
+  useEffect(() => {
+    handleOAuthCallback();
+  }, [handleOAuthCallback]);
 
   // Check authentication status on mount
   useEffect(() => {
