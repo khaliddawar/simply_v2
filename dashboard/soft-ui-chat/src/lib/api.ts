@@ -6,8 +6,22 @@
  */
 import axios from 'axios';
 
-// Base URL from environment variable, falling back to localhost for development
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+// Base URL: Use env variable if set, otherwise detect based on hostname
+// In production (non-localhost), use empty string for same-origin requests
+// In development (localhost), use localhost:8000
+const getApiBase = (): string => {
+  // Check for explicit env variable first
+  const envUrl = import.meta.env.VITE_API_URL;
+  if (envUrl !== undefined && envUrl !== null) {
+    return envUrl; // Use whatever is set (including empty string)
+  }
+  // Auto-detect: if on localhost, use localhost backend; otherwise use same-origin
+  if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
+    return 'http://localhost:8000';
+  }
+  return ''; // Same-origin requests in production
+};
+const API_BASE = getApiBase();
 
 /**
  * Configured Axios instance for API requests
