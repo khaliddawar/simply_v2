@@ -189,7 +189,7 @@ export function ChatMessage({
                 {message.content}
               </span>
             ) : (
-              <div className="prose prose-sm prose-invert max-w-none prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5 prose-headings:my-2 prose-strong:text-foreground prose-a:text-accent-blue">
+              <div className="prose prose-sm prose-invert max-w-none prose-p:my-1 prose-p:text-foreground prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5 prose-li:text-foreground prose-headings:my-2 prose-strong:text-foreground prose-a:text-accent-blue">
                 <ReactMarkdown>{message.content}</ReactMarkdown>
               </div>
             )}
