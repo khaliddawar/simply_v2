@@ -349,3 +349,62 @@ async def fix_test_user_videos(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fix videos: {str(e)}")
+
+
+class AdminResetPasswordRequest(BaseModel):
+    """Request body for admin password reset"""
+    email: str
+    new_password: str
+    admin_secret: str
+
+
+@router.post("/admin/reset-password")
+async def admin_reset_password(request: AdminResetPasswordRequest):
+    """
+    TEMPORARY admin endpoint to reset a user's password.
+    Requires admin_secret for security.
+
+    IMPORTANT: Remove this endpoint after use.
+    """
+    import os
+
+    # Simple security check - require a secret
+    expected_secret = os.getenv("ADMIN_SECRET", "tubevibe-admin-2024")
+    if request.admin_secret != expected_secret:
+        raise HTTPException(status_code=403, detail="Invalid admin secret")
+
+    auth_service = get_auth_service()
+
+    if not auth_service.db:
+        raise HTTPException(status_code=500, detail="Database not available")
+
+    try:
+        # Check if user exists
+        user = await auth_service.db.get_user_by_email(request.email)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Hash new password
+        new_password_hash = auth_service.hash_password(request.new_password)
+
+        # Update password in database
+        await auth_service.db.pool.execute(
+            """
+            UPDATE users
+            SET password_hash = $1, updated_at = NOW()
+            WHERE email = $2
+            """,
+            new_password_hash,
+            request.email
+        )
+
+        return {
+            "success": True,
+            "message": f"Password reset for {request.email}",
+            "user_id": user["id"]
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to reset password: {str(e)}")
