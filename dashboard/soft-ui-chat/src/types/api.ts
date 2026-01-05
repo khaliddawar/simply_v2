@@ -93,6 +93,9 @@ export interface Video {
   transcript_length?: number | null;
   group_id?: string | null;
   group_name?: string | null;
+  // Summary cache status
+  has_summary?: boolean;
+  summary_generated_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -274,6 +277,9 @@ export interface VideoSummaryResponse {
   total_sections: number;
   metadata?: SummaryMetadata | null;
   error?: string | null;
+  // Cache metadata
+  cached?: boolean;  // True if returned from cache
+  cached_at?: string | null;  // ISO timestamp when summary was cached
 }
 
 /**

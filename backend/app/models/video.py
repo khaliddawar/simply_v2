@@ -29,6 +29,9 @@ class VideoResponse(BaseModel):
     transcript_length: Optional[int] = None
     group_id: Optional[str] = None
     group_name: Optional[str] = None
+    # Summary cache status
+    has_summary: bool = False  # True if a cached summary exists
+    summary_generated_at: Optional[datetime] = None  # When the summary was generated
     created_at: datetime
     updated_at: datetime
 
@@ -104,6 +107,9 @@ class VideoSummaryResponse(BaseModel):
     total_sections: int = 0
     metadata: Optional[SummaryMetadata] = None
     error: Optional[str] = None
+    # Cache metadata
+    cached: bool = False  # True if returned from cache, False if freshly generated
+    cached_at: Optional[str] = None  # ISO timestamp when summary was cached
 
 
 class EmailSummaryRequest(BaseModel):

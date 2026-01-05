@@ -101,11 +101,21 @@ export function useMoveTranscript() {
 /**
  * Hook to generate a summary for a video
  * Calls the backend summarization service
+ *
+ * @param forceRegenerate - If true, regenerates summary even if cached version exists
  */
 export function useGenerateSummary() {
   return useMutation({
-    mutationFn: async (videoId: string): Promise<VideoSummaryResponse> => {
-      const { data } = await api.get(`/api/videos/${videoId}/summary`);
+    mutationFn: async ({
+      videoId,
+      forceRegenerate = false,
+    }: {
+      videoId: string;
+      forceRegenerate?: boolean;
+    }): Promise<VideoSummaryResponse> => {
+      const { data } = await api.get(`/api/videos/${videoId}/summary`, {
+        params: { force_regenerate: forceRegenerate },
+      });
       return data;
     },
   });

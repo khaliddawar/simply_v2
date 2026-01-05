@@ -19,6 +19,7 @@ import {
   X,
   CheckCircle,
   Users,
+  RefreshCw,
 } from 'lucide-react';
 import { useSelectedTranscript } from '@/hooks/useSelectedTranscript';
 import { useDeleteTranscript, useGenerateSummary, useEmailSummary } from '@/hooks/useTranscripts';
@@ -100,12 +101,20 @@ export function VideoDetailsPanel() {
     window.open(youtubeUrl, '_blank', 'noopener,noreferrer');
   };
 
-  const handleGenerateSummary = async () => {
+  const handleGenerateSummary = async (forceRegenerate = false) => {
     try {
-      const result = await generateSummary.mutateAsync(id);
+      const result = await generateSummary.mutateAsync({
+        videoId: id,
+        forceRegenerate,
+      });
       if (result.success) {
         setSummary(result);
         setShowSummaryDialog(true);
+        if (result.cached) {
+          toast.success('Loaded cached summary');
+        } else {
+          toast.success('Summary generated successfully');
+        }
       } else {
         toast.error(result.error || 'Failed to generate summary');
       }
@@ -289,7 +298,7 @@ export function VideoDetailsPanel() {
       {/* Generate Summary Button */}
       <div className="p-4 border-b border-border/50">
         <button
-          onClick={handleGenerateSummary}
+          onClick={() => handleGenerateSummary(false)}
           disabled={generateSummary.isPending}
           className="w-full flex items-center justify-center gap-2 px-4 py-2.5
                      bg-primary text-primary-foreground rounded-lg font-medium text-sm
@@ -308,12 +317,24 @@ export function VideoDetailsPanel() {
           )}
         </button>
         {summary && !generateSummary.isPending && (
-          <button
-            onClick={() => setShowSummaryDialog(true)}
-            className="w-full mt-2 text-xs text-primary hover:underline"
-          >
-            Click to view generated summary
-          </button>
+          <div className="mt-2 flex flex-col gap-1">
+            <button
+              onClick={() => setShowSummaryDialog(true)}
+              className="w-full text-xs text-primary hover:underline"
+            >
+              Click to view generated summary
+            </button>
+            {summary.cached && (
+              <span className="text-xs text-muted-foreground text-center">
+                Cached • <button
+                  onClick={() => handleGenerateSummary(true)}
+                  className="text-primary hover:underline"
+                >
+                  Regenerate
+                </button>
+              </span>
+            )}
+          </div>
         )}
       </div>
 
@@ -368,6 +389,11 @@ export function VideoDetailsPanel() {
             <DialogTitle className="flex items-center gap-2">
               <Sparkles className="w-5 h-5 text-primary" />
               Video Summary
+              {summary?.cached && (
+                <span className="ml-2 text-xs font-normal bg-accent text-muted-foreground px-2 py-0.5 rounded">
+                  Cached
+                </span>
+              )}
             </DialogTitle>
             <DialogDescription>{title}</DialogDescription>
           </DialogHeader>
@@ -470,6 +496,17 @@ export function VideoDetailsPanel() {
               onClick={() => setShowSummaryDialog(false)}
             >
               Close
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowSummaryDialog(false);
+                handleGenerateSummary(true);
+              }}
+              disabled={generateSummary.isPending}
+            >
+              <RefreshCw className="w-4 h-4 mr-2" />
+              Regenerate
             </Button>
             <Button onClick={handleEmailSummary} disabled={emailSummary.isPending}>
               <Mail className="w-4 h-4 mr-2" />

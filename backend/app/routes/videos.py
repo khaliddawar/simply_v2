@@ -1,6 +1,7 @@
 """
 Video Routes
 """
+import logging
 from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import Optional
 
@@ -12,7 +13,10 @@ from app.models.video import (
 from app.services.video_service import get_video_service
 from app.services.summarization_service import get_summarization_service
 from app.services.email_service import get_email_service
+from app.services.database_service import get_database_service
 from app.routes.auth import get_current_user_id_optional
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -174,22 +178,43 @@ async def move_video(
 @router.get("/{video_id}/summary", response_model=VideoSummaryResponse)
 async def get_video_summary(
     video_id: str,
-    user_id: str = Depends(get_current_user_id_optional)
+    user_id: str = Depends(get_current_user_id_optional),
+    force_regenerate: bool = Query(
+        False,
+        description="Force regeneration of summary even if cached version exists"
+    )
 ):
     """
-    Generate a structured summary for a video using Topic Detection + Chain of Density.
+    Get or generate a structured summary for a video.
 
-    This endpoint:
+    Summary Caching:
+    - Summaries are cached after first generation to avoid repeated LLM calls
+    - Use force_regenerate=true to regenerate and update the cached summary
+    - Cached summaries are returned instantly without any LLM calls
+
+    Generation Process (when not cached or force_regenerate=true):
     1. Detects topic sections in the transcript
     2. Applies Chain of Density summarization to each section
     3. Generates an executive summary with key takeaways
 
-    Note: This is a compute-intensive operation that makes multiple LLM calls.
+    Note: Fresh generation is compute-intensive and makes multiple LLM calls.
     """
     video_service = get_video_service()
     summarization_service = get_summarization_service()
+    db = await get_database_service()
 
-    # Check if summarization service is available
+    # Check for cached summary first (unless force_regenerate)
+    if not force_regenerate:
+        cached = await db.get_video_summary(video_id=video_id, user_id=user_id)
+        if cached and cached.get("summary_data"):
+            logger.info(f"Returning cached summary for video {video_id}")
+            summary_data = cached["summary_data"]
+            # Add cache metadata to response
+            summary_data["cached"] = True
+            summary_data["cached_at"] = cached.get("summary_generated_at").isoformat() if cached.get("summary_generated_at") else None
+            return VideoSummaryResponse(**summary_data)
+
+    # Check if summarization service is available for fresh generation
     if not summarization_service.is_available():
         raise HTTPException(
             status_code=503,
@@ -215,7 +240,8 @@ async def get_video_summary(
             detail="No transcript available for this video"
         )
 
-    # Generate summary
+    # Generate fresh summary
+    logger.info(f"Generating fresh summary for video {video_id} (force_regenerate={force_regenerate})")
     summary_result = await summarization_service.generate_summary(
         transcript=transcript,
         video_title=video.get("title", "Untitled Video"),
@@ -227,6 +253,21 @@ async def get_video_summary(
             status_code=500,
             detail=summary_result.get("error", "Failed to generate summary")
         )
+
+    # Cache the generated summary
+    try:
+        await db.save_video_summary(
+            video_id=video_id,
+            user_id=user_id,
+            summary_data=summary_result
+        )
+        logger.info(f"Cached summary for video {video_id}")
+    except Exception as e:
+        # Log but don't fail - summary generation succeeded
+        logger.warning(f"Failed to cache summary for video {video_id}: {e}")
+
+    # Mark as freshly generated (not from cache)
+    summary_result["cached"] = False
 
     return VideoSummaryResponse(**summary_result)
 

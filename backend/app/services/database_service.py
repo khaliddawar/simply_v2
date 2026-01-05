@@ -78,6 +78,9 @@ class VideoModel(Base):
     pinecone_file_id = Column(String(100), nullable=True)
     transcript_length = Column(Integer, nullable=True)
     transcript = Column(Text, nullable=True)  # Raw transcript for summarization
+    # Summary caching - stores generated summary to avoid repeated LLM calls
+    summary_data = Column(JSON, nullable=True)  # Full structured summary as JSON
+    summary_generated_at = Column(DateTime, nullable=True)  # When summary was generated
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -181,6 +184,34 @@ class DatabaseService:
                         ALTER TABLE videos ADD COLUMN transcript TEXT
                     """))
                     logger.info("Migration: 'transcript' column added successfully")
+
+                # Check if summary_data column exists in videos table
+                result = await conn.execute(text("""
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name = 'videos' AND column_name = 'summary_data'
+                """))
+
+                if not result.fetchone():
+                    logger.info("Adding 'summary_data' column to videos table...")
+                    await conn.execute(text("""
+                        ALTER TABLE videos ADD COLUMN summary_data JSONB
+                    """))
+                    logger.info("Migration: 'summary_data' column added successfully")
+
+                # Check if summary_generated_at column exists in videos table
+                result = await conn.execute(text("""
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name = 'videos' AND column_name = 'summary_generated_at'
+                """))
+
+                if not result.fetchone():
+                    logger.info("Adding 'summary_generated_at' column to videos table...")
+                    await conn.execute(text("""
+                        ALTER TABLE videos ADD COLUMN summary_generated_at TIMESTAMP
+                    """))
+                    logger.info("Migration: 'summary_generated_at' column added successfully")
 
         except Exception as e:
             logger.warning(f"Migration check/run failed (may be ok for new db): {e}")
@@ -457,7 +488,107 @@ class DatabaseService:
             )
             return True
 
-    def _video_to_dict(self, video: VideoModel, include_transcript: bool = False) -> Dict[str, Any]:
+    async def save_video_summary(
+        self,
+        video_id: str,
+        user_id: str,
+        summary_data: Dict[str, Any]
+    ) -> bool:
+        """
+        Save generated summary to database for caching.
+
+        Args:
+            video_id: The video UUID
+            user_id: The user UUID (for ownership verification)
+            summary_data: The full structured summary dict
+
+        Returns:
+            True if saved successfully
+        """
+        async with self.get_session() as session:
+            result = await session.execute(
+                update(VideoModel)
+                .where(
+                    VideoModel.id == uuid.UUID(video_id),
+                    VideoModel.user_id == uuid.UUID(user_id)
+                )
+                .values(
+                    summary_data=summary_data,
+                    summary_generated_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow()
+                )
+            )
+            return result.rowcount > 0
+
+    async def get_video_summary(
+        self,
+        video_id: str,
+        user_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get cached summary for a video.
+
+        Args:
+            video_id: The video UUID
+            user_id: The user UUID (for ownership verification)
+
+        Returns:
+            Dict with summary_data and summary_generated_at, or None if no summary exists
+        """
+        async with self.get_session() as session:
+            result = await session.execute(
+                select(
+                    VideoModel.summary_data,
+                    VideoModel.summary_generated_at,
+                    VideoModel.title
+                ).where(
+                    VideoModel.id == uuid.UUID(video_id),
+                    VideoModel.user_id == uuid.UUID(user_id)
+                )
+            )
+            row = result.fetchone()
+
+            if not row or row.summary_data is None:
+                return None
+
+            return {
+                "summary_data": row.summary_data,
+                "summary_generated_at": row.summary_generated_at,
+                "video_title": row.title
+            }
+
+    async def clear_video_summary(self, video_id: str, user_id: str) -> bool:
+        """
+        Clear cached summary for a video (useful before regeneration).
+
+        Args:
+            video_id: The video UUID
+            user_id: The user UUID (for ownership verification)
+
+        Returns:
+            True if cleared successfully
+        """
+        async with self.get_session() as session:
+            await session.execute(
+                update(VideoModel)
+                .where(
+                    VideoModel.id == uuid.UUID(video_id),
+                    VideoModel.user_id == uuid.UUID(user_id)
+                )
+                .values(
+                    summary_data=None,
+                    summary_generated_at=None,
+                    updated_at=datetime.utcnow()
+                )
+            )
+            return True
+
+    def _video_to_dict(
+        self,
+        video: VideoModel,
+        include_transcript: bool = False,
+        include_summary: bool = False
+    ) -> Dict[str, Any]:
         """Convert video model to dictionary"""
         result = {
             "id": str(video.id),
@@ -470,11 +601,15 @@ class DatabaseService:
             "thumbnail_url": video.thumbnail_url,
             "pinecone_file_id": video.pinecone_file_id,
             "transcript_length": video.transcript_length,
+            "has_summary": video.summary_data is not None,
+            "summary_generated_at": video.summary_generated_at,
             "created_at": video.created_at,
             "updated_at": video.updated_at
         }
         if include_transcript:
             result["transcript"] = video.transcript
+        if include_summary:
+            result["summary_data"] = video.summary_data
         return result
 
     # =========================================================================
