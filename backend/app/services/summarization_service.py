@@ -26,7 +26,7 @@ TOPIC_DETECTION_PROMPT = """Analyze this video transcript and identify distinct 
 For each section, provide:
 1. A clear title (2-5 words)
 2. The approximate timestamp range (start-end in MM:SS format)
-3. A brief description of what's covered (1 sentence)
+3. A detailed description of what's covered (2-3 sentences)
 
 TRANSCRIPT:
 {transcript}
@@ -38,45 +38,50 @@ Respond in JSON format:
             "title": "Section Title",
             "start_time": "0:00",
             "end_time": "2:30",
-            "description": "Brief description of this section"
+            "description": "Detailed description of this section covering main points discussed"
         }}
     ]
 }}
 
 Important:
-- Identify 3-7 distinct sections based on topic changes
+- Identify 4-8 distinct sections based on topic changes
 - If timestamps are in the transcript, use them; otherwise estimate based on content
 - Keep section titles concise and descriptive
+- ONLY include information that is explicitly stated in the transcript
+- Do NOT infer or assume information not present in the text
 - Output ONLY valid JSON, no additional text"""
 
-CHAIN_OF_DENSITY_PROMPT = """You are an expert summarizer. Generate a summary of the following section using Chain of Density technique.
+CHAIN_OF_DENSITY_PROMPT = """You are an expert summarizer. Generate a comprehensive summary of the following section using Chain of Density technique.
 
 SECTION TITLE: {section_title}
 SECTION CONTENT:
 {section_content}
 
 Your task:
-1. First, write an initial summary (3-4 sentences) covering the main points
-2. Then, identify 2-3 key entities/facts that are missing from your summary
-3. Rewrite the summary to include these entities while keeping the same length
+1. First, write an initial summary (5-7 sentences) covering the main points thoroughly
+2. Then, identify 3-4 key entities/facts that are missing from your summary
+3. Rewrite the summary to include these entities while maintaining clarity
 4. Repeat step 2-3 one more time (total 3 iterations)
 
 After 3 iterations, provide your final dense summary.
 
 Respond in JSON format:
 {{
-    "summary": "Your final dense summary (3-4 sentences, information-rich)",
-    "key_points": ["Key point 1", "Key point 2", "Key point 3"],
-    "entities": ["Important entity/term 1", "Important entity/term 2"]
+    "summary": "Your final dense summary (5-7 sentences, comprehensive and information-rich)",
+    "key_points": ["Key point 1", "Key point 2", "Key point 3", "Key point 4", "Key point 5"],
+    "entities": ["Important entity/term 1", "Important entity/term 2", "Important entity/term 3"]
 }}
 
-Important:
-- The final summary should be information-dense but readable
-- Key points should be actionable or memorable takeaways
-- Entities are important names, terms, numbers, or concepts mentioned
+Critical requirements:
+- The final summary should be information-dense, comprehensive, and readable
+- Include 4-6 key points that are actionable or memorable takeaways
+- Entities are important names, terms, numbers, or concepts EXPLICITLY mentioned
+- ONLY include facts directly stated in the source content - no speculation or inference
+- If specific numbers, statistics, or quotes are mentioned, include them accurately
+- Do NOT add information that is not present in the section content
 - Output ONLY valid JSON"""
 
-EXECUTIVE_SUMMARY_PROMPT = """Based on these section summaries, create an executive summary of the entire video.
+EXECUTIVE_SUMMARY_PROMPT = """Based on these section summaries, create a comprehensive executive summary of the entire video.
 
 VIDEO TITLE: {video_title}
 
@@ -84,18 +89,24 @@ SECTION SUMMARIES:
 {section_summaries}
 
 Create:
-1. An executive summary (2-3 sentences capturing the essence)
-2. 3-5 key takeaways from the entire video
-3. Who would benefit from this video (target audience)
+1. A thorough executive summary (4-6 sentences capturing the main narrative, key arguments, and conclusions)
+2. 5-8 key takeaways from the entire video (actionable insights and important learnings)
+3. Who would benefit from this video (target audience with specific characteristics)
 
 Respond in JSON format:
 {{
-    "executive_summary": "2-3 sentence overview of the entire video",
-    "key_takeaways": ["Takeaway 1", "Takeaway 2", "Takeaway 3"],
-    "target_audience": "Brief description of who should watch this"
+    "executive_summary": "4-6 sentence comprehensive overview covering the main narrative, arguments, and conclusions",
+    "key_takeaways": ["Takeaway 1", "Takeaway 2", "Takeaway 3", "Takeaway 4", "Takeaway 5"],
+    "target_audience": "Detailed description of who should watch this and why they would benefit"
 }}
 
-Output ONLY valid JSON"""
+Critical requirements:
+- The executive summary should synthesize information from ALL sections coherently
+- Key takeaways must be specific, actionable, and directly derived from the content
+- ONLY include information that appears in the section summaries - no external knowledge or speculation
+- If the video mentions specific methods, frameworks, or recommendations, include them
+- Do NOT generalize beyond what is explicitly stated in the summaries
+- Output ONLY valid JSON"""
 
 
 class SummarizationService:
@@ -189,8 +200,9 @@ class SummarizationService:
 
     async def detect_topics(self, transcript: str) -> Dict[str, Any]:
         """Detect topic sections in transcript"""
-        # Truncate transcript if too long (keep first ~8000 chars for topic detection)
-        truncated = transcript[:8000] if len(transcript) > 8000 else transcript
+        # Truncate transcript if too long (keep first ~16000 chars for topic detection)
+        # Increased from 8000 to capture more context for better section identification
+        truncated = transcript[:16000] if len(transcript) > 16000 else transcript
 
         prompt = TOPIC_DETECTION_PROMPT.format(transcript=truncated)
         result = await self._call_llm(prompt, temperature=0.2)
@@ -210,8 +222,9 @@ class SummarizationService:
 
     async def summarize_section(self, section_title: str, section_content: str) -> Dict[str, Any]:
         """Apply Chain of Density summarization to a section"""
-        # Truncate section if too long
-        truncated = section_content[:4000] if len(section_content) > 4000 else section_content
+        # Truncate section if too long (increased from 4000 to 8000 for richer summaries)
+        # This allows more context per section while staying within model limits
+        truncated = section_content[:8000] if len(section_content) > 8000 else section_content
 
         prompt = CHAIN_OF_DENSITY_PROMPT.format(
             section_title=section_title,
