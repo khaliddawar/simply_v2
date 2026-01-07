@@ -424,6 +424,14 @@ async def forgot_password(request: ForgotPasswordRequest):
     settings = get_settings()
     email = request.email.lower().strip()
 
+    # Validate configuration before proceeding
+    if not settings.authorizer_url:
+        return {"success": False, "error": "Authorizer not configured. Please contact support."}
+    if not settings.authorizer_admin_secret:
+        return {"success": False, "error": "Authorizer admin secret not configured. Please contact support."}
+    if not settings.postmark_api_key:
+        return {"success": False, "error": "Email service not configured. Please contact support."}
+
     # Generate a secure random password
     alphabet = string.ascii_letters + string.digits + "!@#$%"
     new_password = ''.join(secrets.choice(alphabet) for _ in range(12))
@@ -588,9 +596,21 @@ async def forgot_password(request: ForgotPasswordRequest):
                 return {"success": False, "error": "Failed to send email. Please try again."}
 
     except Exception as e:
-        # Log error but don't expose details
+        # Log error with full traceback for debugging
+        import traceback
+        error_details = traceback.format_exc()
         print(f"Forgot password error: {e}")
-        return {"success": False, "error": "An error occurred. Please try again later."}
+        print(f"Traceback: {error_details}")
+
+        # Check for common configuration issues
+        if not settings.authorizer_url:
+            return {"success": False, "error": "Authorizer not configured. Please contact support."}
+        if not settings.authorizer_admin_secret:
+            return {"success": False, "error": "Authorizer admin secret not configured. Please contact support."}
+        if not settings.postmark_api_key:
+            return {"success": False, "error": "Email service not configured. Please contact support."}
+
+        return {"success": False, "error": f"An error occurred: {str(e)}"}
 
 
 @router.post("/refresh")
