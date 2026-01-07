@@ -55,6 +55,16 @@ async def lifespan(app: FastAPI):
         video_service.set_database(db)
         app.state.video = video_service
         logger.info("Video service configured with database")
+
+        # Inject database into Authorizer service (if configured)
+        from app.services.authorizer_service import get_authorizer_service
+        authorizer_service = get_authorizer_service()
+        if authorizer_service.is_configured():
+            authorizer_service.set_database(db)
+            app.state.authorizer = authorizer_service
+            logger.info("Authorizer service configured with database")
+        else:
+            logger.info("Authorizer service not configured - using legacy auth only")
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
 
