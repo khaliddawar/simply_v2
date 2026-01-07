@@ -135,7 +135,7 @@ async def health_check():
         "status": "healthy",
         "app": settings.app_name,
         "environment": settings.app_env,
-        "version": "1.0.10"  # Version to verify deployment
+        "version": "1.0.11"  # Version to verify deployment
     }
 
 
