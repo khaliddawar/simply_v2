@@ -469,11 +469,16 @@ async def forgot_password(request: ForgotPasswordRequest):
                     'variables': {'params': {'pagination': {'page': 1, 'limit': 1000}}}
                 }
             )
-            users_result = users_resp.json()
+            users_result = users_resp.json() if users_resp.status_code == 200 else {}
 
             # Find user by email
             authorizer_user = None
-            users = users_result.get('data', {}).get('_users', {}).get('users', [])
+            if users_result and isinstance(users_result, dict):
+                users_data = users_result.get('data') or {}
+                users_obj = users_data.get('_users') or {}
+                users = users_obj.get('users') or []
+            else:
+                users = []
             for user in users:
                 if user.get('email', '').lower() == email:
                     authorizer_user = user
@@ -522,40 +527,44 @@ async def forgot_password(request: ForgotPasswordRequest):
                     }
                 }
             )
-            signup_result = signup_resp.json()
+            signup_result = signup_resp.json() if signup_resp.status_code == 200 else {}
 
             new_user_id = None
-            if signup_result.get('data', {}).get('signup', {}).get('user'):
-                new_user_id = signup_result['data']['signup']['user']['id']
+            if signup_result and isinstance(signup_result, dict):
+                signup_data = signup_result.get('data') or {}
+                signup_obj = signup_data.get('signup') or {}
+                user_obj = signup_obj.get('user')
+                if user_obj:
+                    new_user_id = user_obj.get('id')
 
-                # Verify email manually
-                update_mutation = '''
-                mutation UpdateUser($params: UpdateUserInput!) {
-                    _update_user(params: $params) { id email_verified }
-                }
-                '''
-                await client.post(
-                    f'{settings.authorizer_url}/graphql',
-                    headers={'Content-Type': 'application/json'},
-                    json={
-                        'query': update_mutation,
-                        'variables': {
-                            'params': {
-                                'id': new_user_id,
-                                'email_verified': True,
-                                'given_name': email.split('@')[0]
+                    # Verify email manually
+                    update_mutation = '''
+                    mutation UpdateUser($params: UpdateUserInput!) {
+                        _update_user(params: $params) { id email_verified }
+                    }
+                    '''
+                    await client.post(
+                        f'{settings.authorizer_url}/graphql',
+                        headers={'Content-Type': 'application/json'},
+                        json={
+                            'query': update_mutation,
+                            'variables': {
+                                'params': {
+                                    'id': new_user_id,
+                                    'email_verified': True,
+                                    'given_name': email.split('@')[0]
+                                }
                             }
                         }
-                    }
-                )
-
-                # Update TubeVibe database with new Authorizer ID
-                auth_service = get_auth_service()
-                if auth_service.db:
-                    await auth_service.db.update_user_by_email(
-                        email,
-                        {'authorizer_user_id': new_user_id, 'auth_provider': 'authorizer'}
                     )
+
+                    # Update TubeVibe database with new Authorizer ID
+                    auth_service = get_auth_service()
+                    if auth_service.db:
+                        await auth_service.db.update_user_by_email(
+                            email,
+                            {'authorizer_user_id': new_user_id, 'auth_provider': 'authorizer'}
+                        )
 
             # Step 4: Send new credentials via Postmark
             email_response = await client.post(
