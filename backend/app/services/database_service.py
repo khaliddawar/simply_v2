@@ -41,6 +41,8 @@ class UserModel(Base):
     email = Column(String(255), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=True)  # NULL for OAuth users
     google_id = Column(String(255), nullable=True, unique=True, index=True)
+    authorizer_user_id = Column(String(255), unique=True, nullable=True, index=True)
+    auth_provider = Column(String(50), default='legacy')  # 'legacy' or 'authorizer'
     first_name = Column(String(100), nullable=True)
     last_name = Column(String(100), nullable=True)
     plan_type = Column(String(20), default="free")
@@ -213,6 +215,37 @@ class DatabaseService:
                     """))
                     logger.info("Migration: 'summary_generated_at' column added successfully")
 
+                # Check if authorizer_user_id column exists in users table
+                result = await conn.execute(text("""
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name = 'users' AND column_name = 'authorizer_user_id'
+                """))
+
+                if not result.fetchone():
+                    logger.info("Adding 'authorizer_user_id' column to users table...")
+                    await conn.execute(text("""
+                        ALTER TABLE users ADD COLUMN authorizer_user_id VARCHAR(255) UNIQUE
+                    """))
+                    await conn.execute(text("""
+                        CREATE INDEX IF NOT EXISTS ix_users_authorizer_user_id ON users (authorizer_user_id)
+                    """))
+                    logger.info("Migration: 'authorizer_user_id' column added successfully")
+
+                # Check if auth_provider column exists in users table
+                result = await conn.execute(text("""
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name = 'users' AND column_name = 'auth_provider'
+                """))
+
+                if not result.fetchone():
+                    logger.info("Adding 'auth_provider' column to users table...")
+                    await conn.execute(text("""
+                        ALTER TABLE users ADD COLUMN auth_provider VARCHAR(50) DEFAULT 'legacy'
+                    """))
+                    logger.info("Migration: 'auth_provider' column added successfully")
+
         except Exception as e:
             logger.warning(f"Migration check/run failed (may be ok for new db): {e}")
 
@@ -316,6 +349,70 @@ class DatabaseService:
 
             return self._user_to_dict(user)
 
+    async def get_user_by_authorizer_id(self, authorizer_id: str) -> Optional[Dict[str, Any]]:
+        """Get user by Authorizer user ID"""
+        async with self.get_session() as session:
+            result = await session.execute(
+                select(UserModel).where(UserModel.authorizer_user_id == authorizer_id)
+            )
+            user = result.scalar_one_or_none()
+
+            if not user:
+                return None
+
+            return self._user_to_dict(user)
+
+    async def create_user_from_authorizer(
+        self,
+        authorizer_user_id: str,
+        email: str,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Create TubeVibe user from Authorizer authentication"""
+        async with self.get_session() as session:
+            user_id = uuid.uuid4()
+            pinecone_namespace = f"user_{user_id}"
+
+            user = UserModel(
+                id=user_id,
+                email=email,
+                authorizer_user_id=authorizer_user_id,
+                auth_provider='authorizer',
+                first_name=first_name,
+                last_name=last_name,
+                pinecone_namespace=pinecone_namespace
+            )
+
+            session.add(user)
+            await session.flush()
+
+            return {
+                "id": str(user.id),
+                "email": user.email,
+                "authorizer_user_id": user.authorizer_user_id,
+                "auth_provider": user.auth_provider,
+                "first_name": user.first_name,
+                "last_name": user.last_name,
+                "plan_type": user.plan_type,
+                "pinecone_namespace": user.pinecone_namespace,
+                "created_at": user.created_at
+            }
+
+    async def link_authorizer_user(self, user_id: str, authorizer_user_id: str) -> bool:
+        """Link existing user to Authorizer user ID"""
+        async with self.get_session() as session:
+            result = await session.execute(
+                update(UserModel)
+                .where(UserModel.id == uuid.UUID(user_id))
+                .values(
+                    authorizer_user_id=authorizer_user_id,
+                    auth_provider='authorizer',
+                    updated_at=datetime.utcnow()
+                )
+            )
+            return result.rowcount > 0
+
     async def update_user(self, user_id: str, updates: Dict[str, Any]) -> bool:
         """Update user fields"""
         async with self.get_session() as session:
@@ -327,6 +424,17 @@ class DatabaseService:
             )
             return True
 
+    async def update_user_by_email(self, email: str, updates: Dict[str, Any]) -> bool:
+        """Update user fields by email address"""
+        async with self.get_session() as session:
+            updates["updated_at"] = datetime.utcnow()
+            result = await session.execute(
+                update(UserModel)
+                .where(UserModel.email == email.lower())
+                .values(**updates)
+            )
+            return result.rowcount > 0
+
     def _user_to_dict(self, user: UserModel) -> Dict[str, Any]:
         """Convert user model to dictionary"""
         return {
@@ -334,6 +442,8 @@ class DatabaseService:
             "email": user.email,
             "password_hash": user.password_hash,
             "google_id": user.google_id,
+            "authorizer_user_id": user.authorizer_user_id,
+            "auth_provider": user.auth_provider,
             "first_name": user.first_name,
             "last_name": user.last_name,
             "plan_type": user.plan_type,

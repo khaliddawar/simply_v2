@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     google_redirect_uri: str = "http://localhost:8000/api/auth/google/callback"
     extension_google_client_id: Optional[str] = None
 
+    # Authorizer Integration
+    authorizer_url: Optional[str] = None  # e.g., https://authorizer-tubevibe.up.railway.app
+    authorizer_admin_secret: Optional[str] = None
+    authorizer_webhook_secret: Optional[str] = None
+
     # Database
     database_url: str
 

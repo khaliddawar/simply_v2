@@ -1,5 +1,8 @@
 """
 Authentication Routes
+
+Supports both legacy authentication (email/password, Google OAuth)
+and Authorizer authentication (JWKS-based RS256 token validation).
 """
 from fastapi import APIRouter, HTTPException, Depends, Header, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -12,6 +15,8 @@ from app.models.user import (
     GoogleOAuthRequest, PasswordResetRequest
 )
 from app.services.auth_service import get_auth_service, AuthService
+from app.services.authorizer_service import get_authorizer_service
+from app.settings import get_settings
 
 router = APIRouter()
 security = HTTPBearer()
@@ -22,12 +27,45 @@ class GoogleIdTokenRequest(BaseModel):
     id_token: str
 
 
-def get_current_user_id(
+class AuthorizerTokenRequest(BaseModel):
+    """Request body for Authorizer token validation"""
+    access_token: str
+
+
+async def get_current_user_id(
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ) -> str:
-    """Extract and validate user ID from JWT token"""
+    """
+    Extract and validate user ID from JWT token.
+
+    Supports dual authentication:
+    1. First tries Authorizer validation (RS256 via JWKS)
+    2. Falls back to legacy validation (HS256)
+    """
+    token = credentials.credentials
+    settings = get_settings()
+
+    # Try Authorizer validation first (RS256) if configured
+    if settings.authorizer_url:
+        authorizer_service = get_authorizer_service()
+        payload = authorizer_service.verify_token(token)
+
+        if payload:
+            # Token is valid Authorizer token
+            authorizer_user_id = payload.get("sub")
+            if authorizer_user_id and authorizer_service.db:
+                user = await authorizer_service.db.get_user_by_authorizer_id(authorizer_user_id)
+                if user:
+                    return user["id"]
+                # User authenticated with Authorizer but not in TubeVibe yet
+                raise HTTPException(
+                    status_code=401,
+                    detail="User not found in TubeVibe. Please use /api/auth/authorizer/token first."
+                )
+
+    # Fallback to legacy validation (HS256)
     auth_service = get_auth_service()
-    user_id = auth_service.get_user_id_from_token(credentials.credentials)
+    user_id = auth_service.get_user_id_from_token(token)
 
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
@@ -39,14 +77,17 @@ def get_current_user_id(
 optional_security = HTTPBearer(auto_error=False)
 
 
-def get_current_user_id_optional(
+async def get_current_user_id_optional(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_security)
 ) -> str:
     """
     Extract user ID from token, or return test user ID if allow_no_auth is enabled.
     Used for testing without authentication.
+
+    Supports dual authentication:
+    1. First tries Authorizer validation (RS256 via JWKS)
+    2. Falls back to legacy validation (HS256)
     """
-    from app.settings import get_settings
     settings = get_settings()
 
     # If allow_no_auth is enabled, return test user ID (valid UUID format)
@@ -57,8 +98,29 @@ def get_current_user_id_optional(
     if not credentials:
         raise HTTPException(status_code=401, detail="Authentication required")
 
+    token = credentials.credentials
+
+    # Try Authorizer validation first (RS256) if configured
+    if settings.authorizer_url:
+        authorizer_service = get_authorizer_service()
+        payload = authorizer_service.verify_token(token)
+
+        if payload:
+            # Token is valid Authorizer token
+            authorizer_user_id = payload.get("sub")
+            if authorizer_user_id and authorizer_service.db:
+                user = await authorizer_service.db.get_user_by_authorizer_id(authorizer_user_id)
+                if user:
+                    return user["id"]
+                # User authenticated with Authorizer but not in TubeVibe yet
+                raise HTTPException(
+                    status_code=401,
+                    detail="User not found in TubeVibe. Please use /api/auth/authorizer/token first."
+                )
+
+    # Fallback to legacy validation (HS256)
     auth_service = get_auth_service()
-    user_id = auth_service.get_user_id_from_token(credentials.credentials)
+    user_id = auth_service.get_user_id_from_token(token)
 
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
@@ -239,6 +301,74 @@ async def google_callback(code: str = None, state: str = None, error: str = None
     )
 
 
+# =============================================================================
+# Authorizer Authentication Endpoints
+# =============================================================================
+
+@router.post("/authorizer/token", response_model=TokenResponse)
+async def exchange_authorizer_token(request: AuthorizerTokenRequest):
+    """
+    Exchange Authorizer access token for TubeVibe user data.
+
+    This endpoint:
+    1. Validates the Authorizer JWT via JWKS (RS256)
+    2. Gets/creates the TubeVibe user
+    3. Returns TubeVibe-specific user data (plan_type, pinecone_namespace)
+
+    The Authorizer token is passed through as-is (we don't issue our own JWT).
+    """
+    settings = get_settings()
+
+    if not settings.authorizer_url:
+        raise HTTPException(
+            status_code=501,
+            detail="Authorizer authentication not configured"
+        )
+
+    authorizer_service = get_authorizer_service()
+
+    # Verify Authorizer token
+    payload = authorizer_service.verify_token(request.access_token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid Authorizer token")
+
+    # Extract user info from Authorizer claims
+    authorizer_user_id = payload.get("sub")
+    email = payload.get("email")
+    given_name = payload.get("given_name")
+    family_name = payload.get("family_name")
+
+    if not authorizer_user_id or not email:
+        raise HTTPException(status_code=401, detail="Invalid token claims: missing sub or email")
+
+    # Get or create TubeVibe user
+    user = await authorizer_service.get_or_create_tubevibe_user(
+        authorizer_user_id=authorizer_user_id,
+        email=email,
+        given_name=given_name,
+        family_name=family_name
+    )
+
+    if not user:
+        raise HTTPException(status_code=500, detail="Failed to create/retrieve user")
+
+    # Return user with TubeVibe-specific data
+    # Note: We return the Authorizer token as the access_token since we use it for subsequent requests
+    return TokenResponse(
+        access_token=request.access_token,
+        token_type="bearer",
+        expires_in=1800,  # 30 minutes (Authorizer default)
+        user=UserResponse(
+            id=user["id"],
+            email=user["email"],
+            first_name=user.get("first_name"),
+            last_name=user.get("last_name"),
+            plan_type=user.get("plan_type", "free"),
+            pinecone_namespace=user.get("pinecone_namespace")
+        )
+    )
+
+
 @router.get("/me", response_model=UserResponse)
 async def get_current_user(user_id: str = Depends(get_current_user_id)):
     """
@@ -264,13 +394,203 @@ async def get_current_user(user_id: str = Depends(get_current_user_id)):
     )
 
 
+class ForgotPasswordRequest(BaseModel):
+    """Request body for forgot password"""
+    email: str
+
+
 @router.post("/password-reset")
 async def request_password_reset(request: PasswordResetRequest):
     """
-    Request a password reset email.
+    Request a password reset email (legacy endpoint).
     """
-    # TODO: Implement password reset
     return {"message": "If an account exists with this email, a reset link has been sent"}
+
+
+@router.post("/forgot-password")
+async def forgot_password(request: ForgotPasswordRequest):
+    """
+    Handle forgot password request by generating a new password and sending via Postmark.
+
+    This bypasses Authorizer's SMTP (which doesn't work on Railway) by:
+    1. Generating a new secure password
+    2. Updating the user's password in Authorizer via admin API
+    3. Sending the new credentials via Postmark API
+    """
+    import secrets
+    import string
+    import httpx
+
+    settings = get_settings()
+    email = request.email.lower().strip()
+
+    # Generate a secure random password
+    alphabet = string.ascii_letters + string.digits + "!@#$%"
+    new_password = ''.join(secrets.choice(alphabet) for _ in range(12))
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # Step 1: Admin login to Authorizer
+            login_mutation = '''
+            mutation AdminLogin($params: AdminLoginInput!) {
+                _admin_login(params: $params) { message }
+            }
+            '''
+            await client.post(
+                f'{settings.authorizer_url}/graphql',
+                headers={'Content-Type': 'application/json'},
+                json={
+                    'query': login_mutation,
+                    'variables': {'params': {'admin_secret': settings.authorizer_admin_secret}}
+                }
+            )
+
+            # Step 2: Check if user exists in Authorizer
+            users_query = '''
+            query AdminUsers($params: PaginatedInput!) {
+                _users(params: $params) {
+                    users { id email }
+                }
+            }
+            '''
+            users_resp = await client.post(
+                f'{settings.authorizer_url}/graphql',
+                headers={'Content-Type': 'application/json'},
+                json={
+                    'query': users_query,
+                    'variables': {'params': {'pagination': {'page': 1, 'limit': 1000}}}
+                }
+            )
+            users_result = users_resp.json()
+
+            # Find user by email
+            authorizer_user = None
+            users = users_result.get('data', {}).get('_users', {}).get('users', [])
+            for user in users:
+                if user.get('email', '').lower() == email:
+                    authorizer_user = user
+                    break
+
+            if not authorizer_user:
+                # Don't reveal if user exists - return success anyway
+                return {"success": True, "message": "If an account exists with this email, new credentials have been sent."}
+
+            # Step 3: Delete and recreate user with new password (Authorizer doesn't allow direct password update)
+            # First delete
+            delete_mutation = '''
+            mutation DeleteUser($params: DeleteUserInput!) {
+                _delete_user(params: $params) { message }
+            }
+            '''
+            await client.post(
+                f'{settings.authorizer_url}/graphql',
+                headers={'Content-Type': 'application/json'},
+                json={
+                    'query': delete_mutation,
+                    'variables': {'params': {'email': email}}
+                }
+            )
+
+            # Then signup with new password
+            signup_mutation = '''
+            mutation Signup($params: SignUpInput!) {
+                signup(params: $params) {
+                    message
+                    user { id email }
+                }
+            }
+            '''
+            signup_resp = await client.post(
+                f'{settings.authorizer_url}/graphql',
+                headers={'Content-Type': 'application/json'},
+                json={
+                    'query': signup_mutation,
+                    'variables': {
+                        'params': {
+                            'email': email,
+                            'password': new_password,
+                            'confirm_password': new_password
+                        }
+                    }
+                }
+            )
+            signup_result = signup_resp.json()
+
+            new_user_id = None
+            if signup_result.get('data', {}).get('signup', {}).get('user'):
+                new_user_id = signup_result['data']['signup']['user']['id']
+
+                # Verify email manually
+                update_mutation = '''
+                mutation UpdateUser($params: UpdateUserInput!) {
+                    _update_user(params: $params) { id email_verified }
+                }
+                '''
+                await client.post(
+                    f'{settings.authorizer_url}/graphql',
+                    headers={'Content-Type': 'application/json'},
+                    json={
+                        'query': update_mutation,
+                        'variables': {
+                            'params': {
+                                'id': new_user_id,
+                                'email_verified': True,
+                                'given_name': email.split('@')[0]
+                            }
+                        }
+                    }
+                )
+
+                # Update TubeVibe database with new Authorizer ID
+                auth_service = get_auth_service()
+                if auth_service.db:
+                    await auth_service.db.update_user_by_email(
+                        email,
+                        {'authorizer_user_id': new_user_id, 'auth_provider': 'authorizer'}
+                    )
+
+            # Step 4: Send new credentials via Postmark
+            email_response = await client.post(
+                'https://api.postmarkapp.com/email',
+                headers={
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json',
+                    'X-Postmark-Server-Token': settings.postmark_api_key
+                },
+                json={
+                    'From': f'{settings.postmark_sender_name} <{settings.postmark_from_email}>',
+                    'To': email,
+                    'Subject': 'Your TubeVibe Password Has Been Reset',
+                    'HtmlBody': f'''
+<html>
+<body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+    <h2 style="color: #333;">Password Reset - TubeVibe</h2>
+    <p>Hi,</p>
+    <p>Your password has been reset. Here are your new login credentials:</p>
+    <div style="background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+        <p><strong>Email:</strong> {email}</p>
+        <p><strong>New Password:</strong> {new_password}</p>
+    </div>
+    <p>Please login with these credentials. We recommend changing your password after logging in.</p>
+    <br>
+    <p>Best regards,<br>TubeVibe Team</p>
+</body>
+</html>
+                    ''',
+                    'TextBody': f'Your TubeVibe password has been reset. Email: {email}, New Password: {new_password}',
+                    'MessageStream': 'outbound'
+                }
+            )
+
+            if email_response.status_code == 200:
+                return {"success": True, "message": "New credentials have been sent to your email."}
+            else:
+                return {"success": False, "error": "Failed to send email. Please try again."}
+
+    except Exception as e:
+        # Log error but don't expose details
+        print(f"Forgot password error: {e}")
+        return {"success": False, "error": "An error occurred. Please try again later."}
 
 
 @router.post("/refresh")
