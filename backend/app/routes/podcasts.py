@@ -9,12 +9,14 @@ from fastapi import APIRouter, HTTPException, Depends, Query
 from app.routes.auth import get_current_user_id
 from app.services.podcast_service import get_podcast_service
 from app.services.database_service import get_database_service
+from app.services.summarization_service import get_summarization_service
 from app.models.podcast import (
     PodcastCreate,
     PodcastResponse,
     PodcastWithTranscript,
     PodcastListResponse,
-    PodcastSource
+    PodcastSource,
+    PodcastSummaryResponse
 )
 
 logger = logging.getLogger(__name__)
@@ -196,6 +198,109 @@ async def update_podcast_transcript(
         )
 
     return {"success": True, "podcast": result["podcast"]}
+
+
+@router.get("/{podcast_id}/summary", response_model=PodcastSummaryResponse)
+async def get_podcast_summary(
+    podcast_id: str,
+    user_id: str = Depends(get_current_user_id),
+    force_regenerate: bool = Query(
+        False,
+        description="Force regeneration of summary even if cached version exists"
+    )
+):
+    """
+    Get or generate a structured summary for a podcast.
+
+    Summary Caching:
+    - Summaries are cached after first generation to avoid repeated LLM calls
+    - Use force_regenerate=true to regenerate and update the cached summary
+    - Cached summaries are returned instantly without any LLM calls
+
+    Generation Process (when not cached or force_regenerate=true):
+    - Analyzes the transcript to extract key information
+    - Generates executive summary, key takeaways, action items, decisions, and topics
+    """
+    db = await get_database_service()
+    podcast_service = get_podcast_service()
+    podcast_service.set_database(db)
+    summarization_service = get_summarization_service()
+
+    # Check for cached summary first (unless force_regenerate)
+    if not force_regenerate:
+        cached = await db.get_podcast_summary(podcast_id=podcast_id, user_id=user_id)
+        if cached and cached.get("summary_data"):
+            logger.info(f"Returning cached summary for podcast {podcast_id}")
+            summary_data = cached["summary_data"]
+            # Add cache metadata to response
+            summary_data["cached"] = True
+            summary_data["cached_at"] = cached.get("summary_generated_at").isoformat() if cached.get("summary_generated_at") else None
+            return PodcastSummaryResponse(**summary_data)
+
+    # Check if summarization service is available for fresh generation
+    if not summarization_service.is_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Summarization service not available - OpenAI API key not configured"
+        )
+
+    # Get podcast with transcript
+    podcast = await podcast_service.get_podcast(
+        podcast_id=podcast_id,
+        user_id=user_id,
+        include_transcript=True
+    )
+
+    if not podcast:
+        raise HTTPException(status_code=404, detail="Podcast not found")
+
+    transcript = podcast.get("transcript")
+
+    if not transcript:
+        raise HTTPException(
+            status_code=400,
+            detail="No transcript available for this podcast"
+        )
+
+    # Generate fresh summary
+    logger.info(f"Generating fresh summary for podcast {podcast_id} (force_regenerate={force_regenerate})")
+
+    # Format podcast_date for the summary
+    podcast_date_str = None
+    if podcast.get("podcast_date"):
+        podcast_date_str = podcast["podcast_date"].strftime("%Y-%m-%d") if hasattr(podcast["podcast_date"], 'strftime') else str(podcast["podcast_date"])
+
+    summary_result = await summarization_service.generate_podcast_summary(
+        transcript=transcript,
+        podcast_title=podcast.get("title", "Untitled Podcast"),
+        podcast_id=podcast_id,
+        podcast_subject=podcast.get("subject"),
+        podcast_date=podcast_date_str,
+        participants=podcast.get("participants")
+    )
+
+    if not summary_result.get("success"):
+        raise HTTPException(
+            status_code=500,
+            detail=summary_result.get("error", "Failed to generate summary")
+        )
+
+    # Cache the generated summary
+    try:
+        await db.save_podcast_summary(
+            podcast_id=podcast_id,
+            user_id=user_id,
+            summary_data=summary_result
+        )
+        logger.info(f"Cached summary for podcast {podcast_id}")
+    except Exception as e:
+        # Log but don't fail - summary generation succeeded
+        logger.warning(f"Failed to cache summary for podcast {podcast_id}: {e}")
+
+    # Mark as freshly generated (not from cache)
+    summary_result["cached"] = False
+
+    return PodcastSummaryResponse(**summary_result)
 
 
 @router.get("/stats/summary")

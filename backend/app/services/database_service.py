@@ -720,6 +720,85 @@ class DatabaseService:
             )
             return True
 
+    # =========================================================================
+    # Podcast Summary Methods
+    # =========================================================================
+
+    async def save_podcast_summary(
+        self,
+        podcast_id: str,
+        user_id: str,
+        summary_data: Dict[str, Any]
+    ) -> bool:
+        """
+        Save generated summary to database for caching.
+
+        Args:
+            podcast_id: The podcast UUID
+            user_id: The user UUID (for ownership verification)
+            summary_data: The full structured summary dict
+
+        Returns:
+            True if saved successfully
+        """
+        async with self.get_session() as session:
+            result = await session.execute(
+                update(PodcastModel)
+                .where(
+                    PodcastModel.id == uuid.UUID(podcast_id),
+                    PodcastModel.user_id == uuid.UUID(user_id)
+                )
+                .values(
+                    summary_data=summary_data,
+                    summary_generated_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow()
+                )
+            )
+            return result.rowcount > 0
+
+    async def get_podcast_summary(
+        self,
+        podcast_id: str,
+        user_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get cached summary for a podcast.
+
+        Args:
+            podcast_id: The podcast UUID
+            user_id: The user UUID (for ownership verification)
+
+        Returns:
+            Dict with summary_data and summary_generated_at, or None if no summary exists
+        """
+        async with self.get_session() as session:
+            result = await session.execute(
+                select(
+                    PodcastModel.summary_data,
+                    PodcastModel.summary_generated_at,
+                    PodcastModel.title,
+                    PodcastModel.subject,
+                    PodcastModel.podcast_date,
+                    PodcastModel.participants
+                ).where(
+                    PodcastModel.id == uuid.UUID(podcast_id),
+                    PodcastModel.user_id == uuid.UUID(user_id)
+                )
+            )
+            row = result.fetchone()
+
+            if not row or row.summary_data is None:
+                return None
+
+            return {
+                "summary_data": row.summary_data,
+                "summary_generated_at": row.summary_generated_at,
+                "podcast_title": row.title,
+                "podcast_subject": row.subject,
+                "podcast_date": row.podcast_date,
+                "participants": row.participants
+            }
+
     def _video_to_dict(
         self,
         video: VideoModel,

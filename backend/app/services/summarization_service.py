@@ -383,6 +383,152 @@ class SummarizationService:
                 "error": str(e)
             }
 
+    async def generate_podcast_summary(
+        self,
+        transcript: str,
+        podcast_title: str,
+        podcast_id: Optional[str] = None,
+        podcast_subject: Optional[str] = None,
+        podcast_date: Optional[str] = None,
+        participants: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Generate a structured summary optimized for podcast/meeting transcripts.
+
+        Extracts:
+        - Executive summary
+        - Key takeaways
+        - Action items
+        - Decisions made
+        - Topics discussed
+
+        Args:
+            transcript: Full podcast transcript
+            podcast_title: Title of the podcast/meeting
+            podcast_id: Optional podcast ID for reference
+            podcast_subject: Optional subject/topic
+            podcast_date: Optional date of the podcast
+            participants: Optional list of participants
+
+        Returns:
+            Structured summary with meeting-specific sections
+        """
+        if not self.is_available():
+            return {
+                "success": False,
+                "error": "Summarization service not available - OpenAI API key not configured"
+            }
+
+        try:
+            logger.info(f"Generating podcast summary for: {podcast_title}")
+
+            # Prepare context for the summary
+            context_parts = [f"Title: {podcast_title}"]
+            if podcast_subject:
+                context_parts.append(f"Subject: {podcast_subject}")
+            if podcast_date:
+                context_parts.append(f"Date: {podcast_date}")
+            if participants:
+                context_parts.append(f"Participants: {', '.join(participants)}")
+            context = "\n".join(context_parts)
+
+            # Generate structured summary using a single LLM call
+            prompt = f"""You are an expert meeting summarizer. Analyze the following podcast/meeting transcript and provide a comprehensive summary.
+
+Meeting Context:
+{context}
+
+Transcript:
+{transcript[:15000]}  # Limit to avoid token limits
+
+Please provide the following in JSON format:
+{{
+    "executive_summary": "A 2-3 sentence overview of what was discussed",
+    "key_takeaways": ["List of 3-5 most important points discussed"],
+    "action_items": ["List of specific tasks or follow-ups mentioned"],
+    "decisions_made": ["List of any decisions that were reached"],
+    "topics_discussed": ["List of main topics/themes covered"]
+}}
+
+Return ONLY valid JSON, no additional text."""
+
+            response = await self.client.chat.completions.create(
+                model=self.settings.llm_model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a professional meeting summarizer. Always respond with valid JSON only."
+                    },
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                max_tokens=2000
+            )
+
+            # Parse response
+            response_text = response.choices[0].message.content.strip()
+
+            # Try to extract JSON from response
+            import json
+            try:
+                # Handle potential markdown code blocks
+                if response_text.startswith("```"):
+                    lines = response_text.split("\n")
+                    json_lines = []
+                    in_json = False
+                    for line in lines:
+                        if line.startswith("```json"):
+                            in_json = True
+                            continue
+                        elif line.startswith("```"):
+                            in_json = False
+                            continue
+                        if in_json:
+                            json_lines.append(line)
+                    response_text = "\n".join(json_lines)
+
+                summary_data = json.loads(response_text)
+            except json.JSONDecodeError:
+                logger.warning(f"Failed to parse JSON from LLM response: {response_text[:200]}")
+                # Fallback to basic summary
+                summary_data = {
+                    "executive_summary": f"Summary of {podcast_title}",
+                    "key_takeaways": [],
+                    "action_items": [],
+                    "decisions_made": [],
+                    "topics_discussed": []
+                }
+
+            # Compile final result
+            result = {
+                "success": True,
+                "podcast_id": podcast_id,
+                "podcast_title": podcast_title,
+                "podcast_subject": podcast_subject,
+                "podcast_date": podcast_date,
+                "participants": participants or [],
+                "executive_summary": summary_data.get("executive_summary", ""),
+                "key_takeaways": summary_data.get("key_takeaways", []),
+                "action_items": summary_data.get("action_items", []),
+                "decisions_made": summary_data.get("decisions_made", []),
+                "topics_discussed": summary_data.get("topics_discussed", []),
+                "metadata": {
+                    "model": self.settings.llm_model,
+                    "method": "podcast_summary",
+                    "transcript_length": len(transcript)
+                }
+            }
+
+            logger.info(f"Podcast summary generated successfully for: {podcast_title}")
+            return result
+
+        except Exception as e:
+            logger.error(f"Error generating podcast summary: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
 
 # Singleton instance
 _summarization_service: Optional[SummarizationService] = None

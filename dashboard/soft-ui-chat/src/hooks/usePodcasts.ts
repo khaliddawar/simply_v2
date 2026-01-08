@@ -86,7 +86,7 @@ export function useMovePodcast() {
       groupId: string | null;
     }): Promise<Podcast> => {
       const payload: MovePodcastRequest = { group_id: groupId };
-      const { data } = await api.put(`/api/podcasts/${id}/group`, payload);
+      const { data } = await api.patch(`/api/podcasts/${id}/group`, payload);
       return data;
     },
     onSuccess: () => {
