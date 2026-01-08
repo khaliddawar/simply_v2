@@ -15,11 +15,11 @@ from app.settings import get_settings
 from app.services.database_service import get_database_service
 from app.services.pinecone_service import get_pinecone_service
 from app.services.fireflies_service import get_fireflies_service
-from app.models.meeting import (
+from app.models.podcast import (
     FirefliesWebhookPayload,
     ZoomWebhookPayload,
     WebhookResponse,
-    MeetingSource
+    PodcastSource
 )
 
 logger = logging.getLogger(__name__)
@@ -183,24 +183,24 @@ async def fireflies_webhook(
             return WebhookResponse(
                 success=True,
                 message="Webhook received but no matching user found",
-                meeting_id=meeting_id
+                podcast_id=meeting_id
             )
 
         # Check for duplicate
-        existing = await db.get_meeting_by_external_id(
+        existing = await db.get_podcast_by_external_id(
             user_id=user["id"],
             external_id=meeting_id,
             source="fireflies"
         )
         if existing:
-            logger.info(f"Duplicate Fireflies meeting {meeting_id} for user {user['id']}")
+            logger.info(f"Duplicate Fireflies podcast {meeting_id} for user {user['id']}")
             return WebhookResponse(
                 success=True,
-                message="Meeting already exists",
-                meeting_id=existing["id"]
+                message="Podcast already exists",
+                podcast_id=existing["id"]
             )
 
-        # Store meeting source metadata
+        # Store podcast source metadata
         source_metadata = {
             "audio_url": transcript_data.audio_url,
             "video_url": transcript_data.video_url,
@@ -209,15 +209,15 @@ async def fireflies_webhook(
             "fireflies_summary": transcript_data.summary,
         }
 
-        # Create meeting record
-        meeting = await db.create_meeting(
+        # Create podcast record
+        podcast = await db.create_podcast(
             user_id=user["id"],
             title=transcript_data.title,
             source="fireflies",
             external_id=meeting_id,
             subject=transcript_data.title,
             organizer_email=transcript_data.organizer_email,
-            meeting_date=transcript_data.date,
+            podcast_date=transcript_data.date,
             duration_minutes=transcript_data.duration_minutes,
             participants=transcript_data.participants,
             transcript=transcript_data.transcript_text,
@@ -227,29 +227,29 @@ async def fireflies_webhook(
         # Upload to Pinecone for RAG
         try:
             pinecone_service = get_pinecone_service()
-            pinecone_file_id = await upload_meeting_to_pinecone(
+            pinecone_file_id = await upload_podcast_to_pinecone(
                 pinecone_service=pinecone_service,
-                meeting_id=meeting["id"],
+                podcast_id=podcast["id"],
                 user_id=user["id"],
                 title=transcript_data.title,
                 subject=transcript_data.title,
-                meeting_date=transcript_data.date,
+                podcast_date=transcript_data.date,
                 participants=transcript_data.participants,
                 transcript=transcript_data.transcript_text,
                 source="fireflies"
             )
             if pinecone_file_id:
-                await db.update_meeting_pinecone_id(meeting["id"], pinecone_file_id)
-                logger.info(f"Meeting {meeting['id']} uploaded to Pinecone: {pinecone_file_id}")
+                await db.update_podcast_pinecone_id(podcast["id"], pinecone_file_id)
+                logger.info(f"Podcast {podcast['id']} uploaded to Pinecone: {pinecone_file_id}")
         except Exception as e:
-            logger.error(f"Failed to upload meeting to Pinecone: {e}")
-            # Meeting is still saved, just not in RAG
+            logger.error(f"Failed to upload podcast to Pinecone: {e}")
+            # Podcast is still saved, just not in RAG
 
-        logger.info(f"Fireflies meeting saved: {meeting['id']} - {transcript_data.title}")
+        logger.info(f"Fireflies podcast saved: {podcast['id']} - {transcript_data.title}")
         return WebhookResponse(
             success=True,
-            message="Meeting transcript saved successfully",
-            meeting_id=meeting["id"]
+            message="Podcast transcript saved successfully",
+            podcast_id=podcast["id"]
         )
 
     except Exception as e:
@@ -361,13 +361,13 @@ async def zoom_webhook(
             # Still save the meeting metadata for manual transcript addition
             pass
 
-        # Parse meeting date
-        meeting_date = None
+        # Parse podcast date
+        podcast_date = None
         if start_time:
             try:
-                meeting_date = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+                podcast_date = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
             except ValueError:
-                logger.warning(f"Could not parse meeting date: {start_time}")
+                logger.warning(f"Could not parse podcast date: {start_time}")
 
         # Find user by host email
         db = await get_database_service()
@@ -380,21 +380,21 @@ async def zoom_webhook(
             return WebhookResponse(
                 success=True,
                 message="Webhook received but no matching user found",
-                meeting_id=meeting_id
+                podcast_id=meeting_id
             )
 
         # Check for duplicate
-        existing = await db.get_meeting_by_external_id(
+        existing = await db.get_podcast_by_external_id(
             user_id=user["id"],
             external_id=meeting_id,
             source="zoom"
         )
         if existing:
-            logger.info(f"Duplicate Zoom meeting {meeting_id} for user {user['id']}")
+            logger.info(f"Duplicate Zoom podcast {meeting_id} for user {user['id']}")
             return WebhookResponse(
                 success=True,
-                message="Meeting already exists",
-                meeting_id=existing["id"]
+                message="Podcast already exists",
+                podcast_id=existing["id"]
             )
 
         # Extract participants if available
@@ -413,15 +413,15 @@ async def zoom_webhook(
             "timezone": payload.payload.get("object", {}).get("timezone") if payload.payload else None
         }
 
-        # Create meeting record
-        meeting = await db.create_meeting(
+        # Create podcast record
+        podcast = await db.create_podcast(
             user_id=user["id"],
             title=topic or f"Zoom Meeting {meeting_id}",
             source="zoom",
             external_id=meeting_id,
             subject=topic,
             organizer_email=host_email,
-            meeting_date=meeting_date,
+            podcast_date=podcast_date,
             duration_minutes=duration,
             participants=participants,
             transcript=transcript_text,  # May be None initially
@@ -432,27 +432,27 @@ async def zoom_webhook(
         if transcript_text:
             try:
                 pinecone_service = get_pinecone_service()
-                pinecone_file_id = await upload_meeting_to_pinecone(
+                pinecone_file_id = await upload_podcast_to_pinecone(
                     pinecone_service=pinecone_service,
-                    meeting_id=meeting["id"],
+                    podcast_id=podcast["id"],
                     user_id=user["id"],
                     title=topic or f"Zoom Meeting {meeting_id}",
                     subject=topic,
-                    meeting_date=meeting_date,
+                    podcast_date=podcast_date,
                     participants=participants,
                     transcript=transcript_text,
                     source="zoom"
                 )
                 if pinecone_file_id:
-                    await db.update_meeting_pinecone_id(meeting["id"], pinecone_file_id)
+                    await db.update_podcast_pinecone_id(podcast["id"], pinecone_file_id)
             except Exception as e:
-                logger.error(f"Failed to upload Zoom meeting to Pinecone: {e}")
+                logger.error(f"Failed to upload Zoom podcast to Pinecone: {e}")
 
-        logger.info(f"Zoom meeting saved: {meeting['id']}")
+        logger.info(f"Zoom podcast saved: {podcast['id']}")
         return WebhookResponse(
             success=True,
-            message="Meeting saved successfully" + (" (transcript pending)" if not transcript_text else ""),
-            meeting_id=meeting["id"]
+            message="Podcast saved successfully" + (" (transcript pending)" if not transcript_text else ""),
+            podcast_id=podcast["id"]
         )
 
     except Exception as e:
@@ -464,28 +464,28 @@ async def zoom_webhook(
 # Pinecone Upload Helper
 # =============================================================================
 
-async def upload_meeting_to_pinecone(
+async def upload_podcast_to_pinecone(
     pinecone_service,
-    meeting_id: str,
+    podcast_id: str,
     user_id: str,
     title: str,
     subject: Optional[str],
-    meeting_date: Optional[datetime],
+    podcast_date: Optional[datetime],
     participants: list,
     transcript: str,
     source: str
 ) -> Optional[str]:
     """
-    Upload meeting transcript to Pinecone Assistant for RAG.
+    Upload podcast transcript to Pinecone Assistant for RAG.
 
     Returns the Pinecone file ID if successful, None otherwise.
     """
-    # Format transcript with meeting context
-    date_str = meeting_date.strftime("%Y-%m-%d %H:%M") if meeting_date else "Unknown date"
+    # Format transcript with podcast context
+    date_str = podcast_date.strftime("%Y-%m-%d %H:%M") if podcast_date else "Unknown date"
     participants_str = ", ".join(participants) if participants else "Unknown participants"
 
-    # Create enhanced transcript with meeting metadata embedded
-    enhanced_transcript = f"""## Meeting Information
+    # Create enhanced transcript with podcast metadata embedded
+    enhanced_transcript = f"""## Podcast Information
 - **Subject:** {subject or title}
 - **Date:** {date_str}
 - **Source:** {source.capitalize()}
@@ -501,15 +501,15 @@ async def upload_meeting_to_pinecone(
     try:
         result = await pinecone_service.upload_transcript(
             user_id=user_id,
-            video_id=f"meeting_{meeting_id}",  # Use meeting prefix for identification
+            video_id=f"podcast_{podcast_id}",  # Use podcast prefix for identification
             title=title,
             transcript=enhanced_transcript,
             metadata={
-                "type": "meeting",
+                "type": "podcast",
                 "source": source,
-                "meeting_id": meeting_id,
+                "podcast_id": podcast_id,
                 "subject": subject,
-                "meeting_date": date_str,
+                "podcast_date": date_str,
                 "participants": participants_str
             }
         )
@@ -519,5 +519,5 @@ async def upload_meeting_to_pinecone(
             logger.error(f"Pinecone upload failed: {result.get('error')}")
             return None
     except Exception as e:
-        logger.error(f"Pinecone upload failed for meeting {meeting_id}: {e}")
+        logger.error(f"Pinecone upload failed for podcast {podcast_id}: {e}")
         return None

@@ -106,9 +106,9 @@ class SubscriptionModel(Base):
     extra_data = Column(JSON, nullable=True)
 
 
-class MeetingModel(Base):
-    """Meeting transcripts table - stores transcripts from Fireflies, Zoom, etc."""
-    __tablename__ = "meetings"
+class PodcastModel(Base):
+    """Podcast transcripts table - stores transcripts from Fireflies, Zoom, etc."""
+    __tablename__ = "podcasts"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -116,9 +116,9 @@ class MeetingModel(Base):
     external_id = Column(String(255), nullable=True, index=True)  # Fireflies meeting_id or Zoom recording_id
     source = Column(String(50), nullable=False, default="manual")  # 'fireflies', 'zoom', 'manual'
     title = Column(String(500), nullable=False)
-    subject = Column(String(500), nullable=True)  # Meeting subject/topic
+    subject = Column(String(500), nullable=True)  # Podcast subject/topic
     organizer_email = Column(String(255), nullable=True)
-    meeting_date = Column(DateTime, nullable=True)  # When the meeting occurred
+    podcast_date = Column(DateTime, nullable=True)  # When the podcast occurred
     duration_minutes = Column(Integer, nullable=True)
     participants = Column(JSON, nullable=True)  # List of participant names/emails
     transcript = Column(Text, nullable=True)
@@ -964,10 +964,10 @@ class DatabaseService:
         }
 
     # =========================================================================
-    # Meeting Transcript Operations
+    # Podcast Transcript Operations
     # =========================================================================
 
-    async def create_meeting(
+    async def create_podcast(
         self,
         user_id: str,
         title: str,
@@ -975,7 +975,7 @@ class DatabaseService:
         external_id: Optional[str] = None,
         subject: Optional[str] = None,
         organizer_email: Optional[str] = None,
-        meeting_date: Optional[datetime] = None,
+        podcast_date: Optional[datetime] = None,
         duration_minutes: Optional[int] = None,
         participants: Optional[List[str]] = None,
         transcript: Optional[str] = None,
@@ -983,16 +983,16 @@ class DatabaseService:
         source_metadata: Optional[Dict[str, Any]] = None,
         group_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Create a new meeting transcript entry"""
+        """Create a new podcast transcript entry"""
         async with self.get_session() as session:
-            meeting = MeetingModel(
+            podcast = PodcastModel(
                 user_id=uuid.UUID(user_id),
                 external_id=external_id,
                 source=source,
                 title=title,
                 subject=subject,
                 organizer_email=organizer_email,
-                meeting_date=meeting_date,
+                podcast_date=podcast_date,
                 duration_minutes=duration_minutes,
                 participants=participants or [],
                 transcript=transcript,
@@ -1002,49 +1002,49 @@ class DatabaseService:
                 group_id=uuid.UUID(group_id) if group_id else None
             )
 
-            session.add(meeting)
+            session.add(podcast)
             await session.flush()
 
-            return self._meeting_to_dict(meeting)
+            return self._podcast_to_dict(podcast)
 
-    async def get_meeting(
-        self, meeting_id: str, user_id: str, include_transcript: bool = False
+    async def get_podcast(
+        self, podcast_id: str, user_id: str, include_transcript: bool = False
     ) -> Optional[Dict[str, Any]]:
-        """Get meeting by ID (with user ownership check)"""
+        """Get podcast by ID (with user ownership check)"""
         async with self.get_session() as session:
             result = await session.execute(
-                select(MeetingModel).where(
-                    MeetingModel.id == uuid.UUID(meeting_id),
-                    MeetingModel.user_id == uuid.UUID(user_id)
+                select(PodcastModel).where(
+                    PodcastModel.id == uuid.UUID(podcast_id),
+                    PodcastModel.user_id == uuid.UUID(user_id)
                 )
             )
-            meeting = result.scalar_one_or_none()
+            podcast = result.scalar_one_or_none()
 
-            if not meeting:
+            if not podcast:
                 return None
 
-            return self._meeting_to_dict(meeting, include_transcript=include_transcript)
+            return self._podcast_to_dict(podcast, include_transcript=include_transcript)
 
-    async def get_meeting_by_external_id(
+    async def get_podcast_by_external_id(
         self, user_id: str, external_id: str, source: str
     ) -> Optional[Dict[str, Any]]:
-        """Get meeting by external ID for a specific user (for duplicate checking)"""
+        """Get podcast by external ID for a specific user (for duplicate checking)"""
         async with self.get_session() as session:
             result = await session.execute(
-                select(MeetingModel).where(
-                    MeetingModel.external_id == external_id,
-                    MeetingModel.source == source,
-                    MeetingModel.user_id == uuid.UUID(user_id)
+                select(PodcastModel).where(
+                    PodcastModel.external_id == external_id,
+                    PodcastModel.source == source,
+                    PodcastModel.user_id == uuid.UUID(user_id)
                 )
             )
-            meeting = result.scalar_one_or_none()
+            podcast = result.scalar_one_or_none()
 
-            if not meeting:
+            if not podcast:
                 return None
 
-            return self._meeting_to_dict(meeting)
+            return self._podcast_to_dict(podcast)
 
-    async def list_meetings(
+    async def list_podcasts(
         self,
         user_id: str,
         group_id: Optional[str] = None,
@@ -1052,57 +1052,57 @@ class DatabaseService:
         offset: int = 0,
         limit: int = 20
     ) -> Dict[str, Any]:
-        """List meetings for a user"""
+        """List podcasts for a user"""
         async with self.get_session() as session:
-            query = select(MeetingModel).where(MeetingModel.user_id == uuid.UUID(user_id))
+            query = select(PodcastModel).where(PodcastModel.user_id == uuid.UUID(user_id))
 
             if group_id:
-                query = query.where(MeetingModel.group_id == uuid.UUID(group_id))
+                query = query.where(PodcastModel.group_id == uuid.UUID(group_id))
 
             if source:
-                query = query.where(MeetingModel.source == source)
+                query = query.where(PodcastModel.source == source)
 
             # Get total count
-            count_query = select(MeetingModel.id).where(MeetingModel.user_id == uuid.UUID(user_id))
+            count_query = select(PodcastModel.id).where(PodcastModel.user_id == uuid.UUID(user_id))
             if group_id:
-                count_query = count_query.where(MeetingModel.group_id == uuid.UUID(group_id))
+                count_query = count_query.where(PodcastModel.group_id == uuid.UUID(group_id))
             if source:
-                count_query = count_query.where(MeetingModel.source == source)
+                count_query = count_query.where(PodcastModel.source == source)
 
             count_result = await session.execute(count_query)
             total = len(count_result.all())
 
             # Get paginated results
-            query = query.order_by(MeetingModel.meeting_date.desc().nulls_last(), MeetingModel.created_at.desc()).offset(offset).limit(limit)
+            query = query.order_by(PodcastModel.podcast_date.desc().nulls_last(), PodcastModel.created_at.desc()).offset(offset).limit(limit)
             result = await session.execute(query)
-            meetings = result.scalars().all()
+            podcasts = result.scalars().all()
 
             return {
-                "meetings": [self._meeting_to_dict(m) for m in meetings],
+                "podcasts": [self._podcast_to_dict(m) for m in podcasts],
                 "total": total,
                 "offset": offset,
                 "limit": limit
             }
 
-    async def delete_meeting(self, meeting_id: str, user_id: str) -> bool:
-        """Delete a meeting"""
+    async def delete_podcast(self, podcast_id: str, user_id: str) -> bool:
+        """Delete a podcast"""
         async with self.get_session() as session:
             await session.execute(
-                delete(MeetingModel).where(
-                    MeetingModel.id == uuid.UUID(meeting_id),
-                    MeetingModel.user_id == uuid.UUID(user_id)
+                delete(PodcastModel).where(
+                    PodcastModel.id == uuid.UUID(podcast_id),
+                    PodcastModel.user_id == uuid.UUID(user_id)
                 )
             )
             return True
 
-    async def update_meeting_group(self, meeting_id: str, user_id: str, group_id: Optional[str]) -> bool:
-        """Move meeting to a different group"""
+    async def update_podcast_group(self, podcast_id: str, user_id: str, group_id: Optional[str]) -> bool:
+        """Move podcast to a different group"""
         async with self.get_session() as session:
             await session.execute(
-                update(MeetingModel)
+                update(PodcastModel)
                 .where(
-                    MeetingModel.id == uuid.UUID(meeting_id),
-                    MeetingModel.user_id == uuid.UUID(user_id)
+                    PodcastModel.id == uuid.UUID(podcast_id),
+                    PodcastModel.user_id == uuid.UUID(user_id)
                 )
                 .values(
                     group_id=uuid.UUID(group_id) if group_id else None,
@@ -1111,12 +1111,12 @@ class DatabaseService:
             )
             return True
 
-    async def update_meeting_pinecone_id(self, meeting_id: str, pinecone_file_id: str) -> bool:
-        """Update meeting's Pinecone file ID after upload"""
+    async def update_podcast_pinecone_id(self, podcast_id: str, pinecone_file_id: str) -> bool:
+        """Update podcast's Pinecone file ID after upload"""
         async with self.get_session() as session:
             await session.execute(
-                update(MeetingModel)
-                .where(MeetingModel.id == uuid.UUID(meeting_id))
+                update(PodcastModel)
+                .where(PodcastModel.id == uuid.UUID(podcast_id))
                 .values(
                     pinecone_file_id=pinecone_file_id,
                     updated_at=datetime.utcnow()
@@ -1124,19 +1124,19 @@ class DatabaseService:
             )
             return True
 
-    async def save_meeting_summary(
+    async def save_podcast_summary(
         self,
-        meeting_id: str,
+        podcast_id: str,
         user_id: str,
         summary_data: Dict[str, Any]
     ) -> bool:
         """Save generated summary to database for caching"""
         async with self.get_session() as session:
             result = await session.execute(
-                update(MeetingModel)
+                update(PodcastModel)
                 .where(
-                    MeetingModel.id == uuid.UUID(meeting_id),
-                    MeetingModel.user_id == uuid.UUID(user_id)
+                    PodcastModel.id == uuid.UUID(podcast_id),
+                    PodcastModel.user_id == uuid.UUID(user_id)
                 )
                 .values(
                     summary_data=summary_data,
@@ -1146,24 +1146,24 @@ class DatabaseService:
             )
             return result.rowcount > 0
 
-    async def get_meeting_summary(
+    async def get_podcast_summary(
         self,
-        meeting_id: str,
+        podcast_id: str,
         user_id: str
     ) -> Optional[Dict[str, Any]]:
-        """Get cached summary for a meeting"""
+        """Get cached summary for a podcast"""
         async with self.get_session() as session:
             result = await session.execute(
                 select(
-                    MeetingModel.summary_data,
-                    MeetingModel.summary_generated_at,
-                    MeetingModel.title,
-                    MeetingModel.subject,
-                    MeetingModel.meeting_date,
-                    MeetingModel.participants
+                    PodcastModel.summary_data,
+                    PodcastModel.summary_generated_at,
+                    PodcastModel.title,
+                    PodcastModel.subject,
+                    PodcastModel.podcast_date,
+                    PodcastModel.participants
                 ).where(
-                    MeetingModel.id == uuid.UUID(meeting_id),
-                    MeetingModel.user_id == uuid.UUID(user_id)
+                    PodcastModel.id == uuid.UUID(podcast_id),
+                    PodcastModel.user_id == uuid.UUID(user_id)
                 )
             )
             row = result.fetchone()
@@ -1174,43 +1174,43 @@ class DatabaseService:
             return {
                 "summary_data": row.summary_data,
                 "summary_generated_at": row.summary_generated_at,
-                "meeting_title": row.title,
-                "meeting_subject": row.subject,
-                "meeting_date": row.meeting_date,
+                "podcast_title": row.title,
+                "podcast_subject": row.subject,
+                "podcast_date": row.podcast_date,
                 "participants": row.participants
             }
 
-    def _meeting_to_dict(
+    def _podcast_to_dict(
         self,
-        meeting: MeetingModel,
+        podcast: PodcastModel,
         include_transcript: bool = False,
         include_summary: bool = False
     ) -> Dict[str, Any]:
-        """Convert meeting model to dictionary"""
+        """Convert podcast model to dictionary"""
         result = {
-            "id": str(meeting.id),
-            "user_id": str(meeting.user_id),
-            "group_id": str(meeting.group_id) if meeting.group_id else None,
-            "external_id": meeting.external_id,
-            "source": meeting.source,
-            "title": meeting.title,
-            "subject": meeting.subject,
-            "organizer_email": meeting.organizer_email,
-            "meeting_date": meeting.meeting_date,
-            "duration_minutes": meeting.duration_minutes,
-            "participants": meeting.participants or [],
-            "transcript_length": meeting.transcript_length,
-            "pinecone_file_id": meeting.pinecone_file_id,
-            "source_metadata": meeting.source_metadata,
-            "has_summary": meeting.summary_data is not None,
-            "summary_generated_at": meeting.summary_generated_at,
-            "created_at": meeting.created_at,
-            "updated_at": meeting.updated_at
+            "id": str(podcast.id),
+            "user_id": str(podcast.user_id),
+            "group_id": str(podcast.group_id) if podcast.group_id else None,
+            "external_id": podcast.external_id,
+            "source": podcast.source,
+            "title": podcast.title,
+            "subject": podcast.subject,
+            "organizer_email": podcast.organizer_email,
+            "podcast_date": podcast.podcast_date,
+            "duration_minutes": podcast.duration_minutes,
+            "participants": podcast.participants or [],
+            "transcript_length": podcast.transcript_length,
+            "pinecone_file_id": podcast.pinecone_file_id,
+            "source_metadata": podcast.source_metadata,
+            "has_summary": podcast.summary_data is not None,
+            "summary_generated_at": podcast.summary_generated_at,
+            "created_at": podcast.created_at,
+            "updated_at": podcast.updated_at
         }
         if include_transcript:
-            result["transcript"] = meeting.transcript
+            result["transcript"] = podcast.transcript
         if include_summary:
-            result["summary_data"] = meeting.summary_data
+            result["summary_data"] = podcast.summary_data
         return result
 
 

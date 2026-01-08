@@ -13,7 +13,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 from app.settings import get_settings
-from app.routes import auth, videos, groups, search, payments, webhooks, meetings
+from app.routes import auth, videos, groups, search, payments, webhooks, podcasts
 
 # Configure logging
 logging.basicConfig(
@@ -126,7 +126,7 @@ app.include_router(videos.router, prefix="/api/videos", tags=["Videos"])
 app.include_router(groups.router, prefix="/api/groups", tags=["Groups"])
 app.include_router(search.router, prefix="/api/search", tags=["Search"])
 app.include_router(payments.router, prefix="/api/payments", tags=["Payments"])
-app.include_router(meetings.router, prefix="/api/meetings", tags=["Meetings"])
+app.include_router(podcasts.router, prefix="/api/podcasts", tags=["Podcasts"])
 app.include_router(webhooks.router, prefix="/webhook", tags=["Webhooks"])
 
 

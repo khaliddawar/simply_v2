@@ -1,5 +1,5 @@
 """
-Meeting Transcript Models for Fireflies and Zoom Webhooks
+Podcast Transcript Models for Fireflies and Zoom Webhooks
 """
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
@@ -7,8 +7,8 @@ from datetime import datetime
 from enum import Enum
 
 
-class MeetingSource(str, Enum):
-    """Source of the meeting transcript"""
+class PodcastSource(str, Enum):
+    """Source of the podcast transcript"""
     FIREFLIES = "fireflies"
     ZOOM = "zoom"
     MANUAL = "manual"
@@ -152,29 +152,29 @@ class ZoomWebhookPayload(BaseModel):
         return None
 
 
-# ============== Meeting Transcript Database Models ==============
+# ============== Podcast Transcript Database Models ==============
 
-class MeetingCreate(BaseModel):
-    """Schema for creating a meeting transcript manually"""
+class PodcastCreate(BaseModel):
+    """Schema for creating a podcast transcript manually"""
     title: str = Field(..., max_length=500)
     subject: Optional[str] = Field(None, max_length=500)
     transcript: str
-    meeting_date: Optional[datetime] = None
+    podcast_date: Optional[datetime] = None
     duration_minutes: Optional[int] = None
     participants: Optional[List[str]] = []
-    source: MeetingSource = MeetingSource.MANUAL
+    source: PodcastSource = PodcastSource.MANUAL
     group_id: Optional[str] = None
 
 
-class MeetingResponse(BaseModel):
-    """Schema for meeting transcript response"""
+class PodcastResponse(BaseModel):
+    """Schema for podcast transcript response"""
     id: str
     external_id: Optional[str] = None
     source: str
     title: str
     subject: Optional[str] = None
     organizer_email: Optional[str] = None
-    meeting_date: Optional[datetime] = None
+    podcast_date: Optional[datetime] = None
     duration_minutes: Optional[int] = None
     participants: Optional[List[str]] = []
     transcript_length: Optional[int] = None
@@ -193,27 +193,27 @@ class MeetingResponse(BaseModel):
         from_attributes = True
 
 
-class MeetingWithTranscript(MeetingResponse):
-    """Meeting response including transcript content"""
+class PodcastWithTranscript(PodcastResponse):
+    """Podcast response including transcript content"""
     transcript: Optional[str] = None
 
 
-class MeetingListResponse(BaseModel):
-    """Schema for paginated meeting list"""
-    meetings: List[MeetingResponse]
+class PodcastListResponse(BaseModel):
+    """Schema for paginated podcast list"""
+    podcasts: List[PodcastResponse]
     total: int
     page: int
     per_page: int
     has_more: bool
 
 
-class MeetingSummaryResponse(BaseModel):
-    """Summary response for meeting transcript"""
+class PodcastSummaryResponse(BaseModel):
+    """Summary response for podcast transcript"""
     success: bool
-    meeting_id: Optional[str] = None
-    meeting_title: str
-    meeting_subject: Optional[str] = None
-    meeting_date: Optional[str] = None
+    podcast_id: Optional[str] = None
+    podcast_title: str
+    podcast_subject: Optional[str] = None
+    podcast_date: Optional[str] = None
     participants: Optional[List[str]] = []
     executive_summary: str
     key_takeaways: List[str] = []
@@ -232,5 +232,5 @@ class WebhookResponse(BaseModel):
     """Standard webhook response"""
     success: bool
     message: str
-    meeting_id: Optional[str] = None
+    podcast_id: Optional[str] = None
     error: Optional[str] = None
