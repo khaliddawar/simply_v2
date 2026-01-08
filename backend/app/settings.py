@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     paddle_premium_price_id: Optional[str] = None
     paddle_enterprise_price_id: Optional[str] = None
 
+    # External Transcript Webhooks
+    fireflies_webhook_secret: Optional[str] = None  # From Fireflies webhook settings
+    fireflies_api_key: Optional[str] = None  # Fireflies API key for fetching transcripts
+    zoom_webhook_secret: Optional[str] = None  # From Zoom Marketplace app settings
+
     # Email (Postmark)
     postmark_api_key: Optional[str] = None
     postmark_from_email: str = "summary@tubevibe.app"

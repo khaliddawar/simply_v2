@@ -13,7 +13,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 from app.settings import get_settings
-from app.routes import auth, videos, groups, search, payments
+from app.routes import auth, videos, groups, search, payments, webhooks, meetings
 
 # Configure logging
 logging.basicConfig(
@@ -126,6 +126,8 @@ app.include_router(videos.router, prefix="/api/videos", tags=["Videos"])
 app.include_router(groups.router, prefix="/api/groups", tags=["Groups"])
 app.include_router(search.router, prefix="/api/search", tags=["Search"])
 app.include_router(payments.router, prefix="/api/payments", tags=["Payments"])
+app.include_router(meetings.router, prefix="/api/meetings", tags=["Meetings"])
+app.include_router(webhooks.router, prefix="/webhook", tags=["Webhooks"])
 
 
 @app.get("/health")
@@ -178,8 +180,8 @@ if static_path and (static_path / "assets").exists():
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
         """Handle SPA routing - return index.html for client-side routes"""
-        # Don't catch API routes or special endpoints
-        if full_path.startswith("api/") or full_path in ["health", "docs", "redoc", "openapi.json"]:
+        # Don't catch API routes, webhooks, or special endpoints
+        if full_path.startswith(("api/", "webhook/")) or full_path in ["health", "docs", "redoc", "openapi.json"]:
             return {"detail": "Not Found"}
 
         # Check if it's a static file

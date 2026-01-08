@@ -106,6 +106,33 @@ class SubscriptionModel(Base):
     extra_data = Column(JSON, nullable=True)
 
 
+class MeetingModel(Base):
+    """Meeting transcripts table - stores transcripts from Fireflies, Zoom, etc."""
+    __tablename__ = "meetings"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    group_id = Column(UUID(as_uuid=True), ForeignKey("video_groups.id", ondelete="SET NULL"), nullable=True, index=True)
+    external_id = Column(String(255), nullable=True, index=True)  # Fireflies meeting_id or Zoom recording_id
+    source = Column(String(50), nullable=False, default="manual")  # 'fireflies', 'zoom', 'manual'
+    title = Column(String(500), nullable=False)
+    subject = Column(String(500), nullable=True)  # Meeting subject/topic
+    organizer_email = Column(String(255), nullable=True)
+    meeting_date = Column(DateTime, nullable=True)  # When the meeting occurred
+    duration_minutes = Column(Integer, nullable=True)
+    participants = Column(JSON, nullable=True)  # List of participant names/emails
+    transcript = Column(Text, nullable=True)
+    transcript_length = Column(Integer, nullable=True)
+    pinecone_file_id = Column(String(100), nullable=True)
+    # Source-specific metadata (audio_url, video_url, action_items, etc.)
+    source_metadata = Column(JSON, nullable=True)
+    # Summary caching
+    summary_data = Column(JSON, nullable=True)
+    summary_generated_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 # =============================================================================
 # Database Service
 # =============================================================================
@@ -873,6 +900,52 @@ class DatabaseService:
                 await session.flush()
                 return self._subscription_to_dict(sub)
 
+    async def get_subscription_by_paddle_id(self, paddle_subscription_id: str) -> Optional[Dict[str, Any]]:
+        """Get subscription by Paddle subscription ID"""
+        async with self.get_session() as session:
+            result = await session.execute(
+                select(SubscriptionModel).where(
+                    SubscriptionModel.paddle_subscription_id == paddle_subscription_id
+                )
+            )
+            sub = result.scalar_one_or_none()
+            return self._subscription_to_dict(sub) if sub else None
+
+    async def update_subscription_by_paddle_id(
+        self,
+        paddle_subscription_id: str,
+        updates: Dict[str, Any]
+    ) -> bool:
+        """Update subscription by Paddle subscription ID"""
+        async with self.get_session() as session:
+            updates["updated_at"] = datetime.utcnow()
+            result = await session.execute(
+                update(SubscriptionModel)
+                .where(SubscriptionModel.paddle_subscription_id == paddle_subscription_id)
+                .values(**updates)
+            )
+            return result.rowcount > 0
+
+    async def get_user_by_paddle_subscription_id(self, paddle_subscription_id: str) -> Optional[Dict[str, Any]]:
+        """Get user by their Paddle subscription ID"""
+        async with self.get_session() as session:
+            # First find the subscription
+            result = await session.execute(
+                select(SubscriptionModel).where(
+                    SubscriptionModel.paddle_subscription_id == paddle_subscription_id
+                )
+            )
+            sub = result.scalar_one_or_none()
+            if not sub:
+                return None
+
+            # Then get the user
+            user_result = await session.execute(
+                select(UserModel).where(UserModel.id == sub.user_id)
+            )
+            user = user_result.scalar_one_or_none()
+            return self._user_to_dict(user) if user else None
+
     def _subscription_to_dict(self, sub: SubscriptionModel) -> Dict[str, Any]:
         """Convert subscription model to dictionary"""
         return {
@@ -889,6 +962,256 @@ class DatabaseService:
             "created_at": sub.created_at,
             "updated_at": sub.updated_at
         }
+
+    # =========================================================================
+    # Meeting Transcript Operations
+    # =========================================================================
+
+    async def create_meeting(
+        self,
+        user_id: str,
+        title: str,
+        source: str = "manual",
+        external_id: Optional[str] = None,
+        subject: Optional[str] = None,
+        organizer_email: Optional[str] = None,
+        meeting_date: Optional[datetime] = None,
+        duration_minutes: Optional[int] = None,
+        participants: Optional[List[str]] = None,
+        transcript: Optional[str] = None,
+        pinecone_file_id: Optional[str] = None,
+        source_metadata: Optional[Dict[str, Any]] = None,
+        group_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Create a new meeting transcript entry"""
+        async with self.get_session() as session:
+            meeting = MeetingModel(
+                user_id=uuid.UUID(user_id),
+                external_id=external_id,
+                source=source,
+                title=title,
+                subject=subject,
+                organizer_email=organizer_email,
+                meeting_date=meeting_date,
+                duration_minutes=duration_minutes,
+                participants=participants or [],
+                transcript=transcript,
+                transcript_length=len(transcript) if transcript else 0,
+                pinecone_file_id=pinecone_file_id,
+                source_metadata=source_metadata,
+                group_id=uuid.UUID(group_id) if group_id else None
+            )
+
+            session.add(meeting)
+            await session.flush()
+
+            return self._meeting_to_dict(meeting)
+
+    async def get_meeting(
+        self, meeting_id: str, user_id: str, include_transcript: bool = False
+    ) -> Optional[Dict[str, Any]]:
+        """Get meeting by ID (with user ownership check)"""
+        async with self.get_session() as session:
+            result = await session.execute(
+                select(MeetingModel).where(
+                    MeetingModel.id == uuid.UUID(meeting_id),
+                    MeetingModel.user_id == uuid.UUID(user_id)
+                )
+            )
+            meeting = result.scalar_one_or_none()
+
+            if not meeting:
+                return None
+
+            return self._meeting_to_dict(meeting, include_transcript=include_transcript)
+
+    async def get_meeting_by_external_id(
+        self, user_id: str, external_id: str, source: str
+    ) -> Optional[Dict[str, Any]]:
+        """Get meeting by external ID for a specific user (for duplicate checking)"""
+        async with self.get_session() as session:
+            result = await session.execute(
+                select(MeetingModel).where(
+                    MeetingModel.external_id == external_id,
+                    MeetingModel.source == source,
+                    MeetingModel.user_id == uuid.UUID(user_id)
+                )
+            )
+            meeting = result.scalar_one_or_none()
+
+            if not meeting:
+                return None
+
+            return self._meeting_to_dict(meeting)
+
+    async def list_meetings(
+        self,
+        user_id: str,
+        group_id: Optional[str] = None,
+        source: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 20
+    ) -> Dict[str, Any]:
+        """List meetings for a user"""
+        async with self.get_session() as session:
+            query = select(MeetingModel).where(MeetingModel.user_id == uuid.UUID(user_id))
+
+            if group_id:
+                query = query.where(MeetingModel.group_id == uuid.UUID(group_id))
+
+            if source:
+                query = query.where(MeetingModel.source == source)
+
+            # Get total count
+            count_query = select(MeetingModel.id).where(MeetingModel.user_id == uuid.UUID(user_id))
+            if group_id:
+                count_query = count_query.where(MeetingModel.group_id == uuid.UUID(group_id))
+            if source:
+                count_query = count_query.where(MeetingModel.source == source)
+
+            count_result = await session.execute(count_query)
+            total = len(count_result.all())
+
+            # Get paginated results
+            query = query.order_by(MeetingModel.meeting_date.desc().nulls_last(), MeetingModel.created_at.desc()).offset(offset).limit(limit)
+            result = await session.execute(query)
+            meetings = result.scalars().all()
+
+            return {
+                "meetings": [self._meeting_to_dict(m) for m in meetings],
+                "total": total,
+                "offset": offset,
+                "limit": limit
+            }
+
+    async def delete_meeting(self, meeting_id: str, user_id: str) -> bool:
+        """Delete a meeting"""
+        async with self.get_session() as session:
+            await session.execute(
+                delete(MeetingModel).where(
+                    MeetingModel.id == uuid.UUID(meeting_id),
+                    MeetingModel.user_id == uuid.UUID(user_id)
+                )
+            )
+            return True
+
+    async def update_meeting_group(self, meeting_id: str, user_id: str, group_id: Optional[str]) -> bool:
+        """Move meeting to a different group"""
+        async with self.get_session() as session:
+            await session.execute(
+                update(MeetingModel)
+                .where(
+                    MeetingModel.id == uuid.UUID(meeting_id),
+                    MeetingModel.user_id == uuid.UUID(user_id)
+                )
+                .values(
+                    group_id=uuid.UUID(group_id) if group_id else None,
+                    updated_at=datetime.utcnow()
+                )
+            )
+            return True
+
+    async def update_meeting_pinecone_id(self, meeting_id: str, pinecone_file_id: str) -> bool:
+        """Update meeting's Pinecone file ID after upload"""
+        async with self.get_session() as session:
+            await session.execute(
+                update(MeetingModel)
+                .where(MeetingModel.id == uuid.UUID(meeting_id))
+                .values(
+                    pinecone_file_id=pinecone_file_id,
+                    updated_at=datetime.utcnow()
+                )
+            )
+            return True
+
+    async def save_meeting_summary(
+        self,
+        meeting_id: str,
+        user_id: str,
+        summary_data: Dict[str, Any]
+    ) -> bool:
+        """Save generated summary to database for caching"""
+        async with self.get_session() as session:
+            result = await session.execute(
+                update(MeetingModel)
+                .where(
+                    MeetingModel.id == uuid.UUID(meeting_id),
+                    MeetingModel.user_id == uuid.UUID(user_id)
+                )
+                .values(
+                    summary_data=summary_data,
+                    summary_generated_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow()
+                )
+            )
+            return result.rowcount > 0
+
+    async def get_meeting_summary(
+        self,
+        meeting_id: str,
+        user_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Get cached summary for a meeting"""
+        async with self.get_session() as session:
+            result = await session.execute(
+                select(
+                    MeetingModel.summary_data,
+                    MeetingModel.summary_generated_at,
+                    MeetingModel.title,
+                    MeetingModel.subject,
+                    MeetingModel.meeting_date,
+                    MeetingModel.participants
+                ).where(
+                    MeetingModel.id == uuid.UUID(meeting_id),
+                    MeetingModel.user_id == uuid.UUID(user_id)
+                )
+            )
+            row = result.fetchone()
+
+            if not row or row.summary_data is None:
+                return None
+
+            return {
+                "summary_data": row.summary_data,
+                "summary_generated_at": row.summary_generated_at,
+                "meeting_title": row.title,
+                "meeting_subject": row.subject,
+                "meeting_date": row.meeting_date,
+                "participants": row.participants
+            }
+
+    def _meeting_to_dict(
+        self,
+        meeting: MeetingModel,
+        include_transcript: bool = False,
+        include_summary: bool = False
+    ) -> Dict[str, Any]:
+        """Convert meeting model to dictionary"""
+        result = {
+            "id": str(meeting.id),
+            "user_id": str(meeting.user_id),
+            "group_id": str(meeting.group_id) if meeting.group_id else None,
+            "external_id": meeting.external_id,
+            "source": meeting.source,
+            "title": meeting.title,
+            "subject": meeting.subject,
+            "organizer_email": meeting.organizer_email,
+            "meeting_date": meeting.meeting_date,
+            "duration_minutes": meeting.duration_minutes,
+            "participants": meeting.participants or [],
+            "transcript_length": meeting.transcript_length,
+            "pinecone_file_id": meeting.pinecone_file_id,
+            "source_metadata": meeting.source_metadata,
+            "has_summary": meeting.summary_data is not None,
+            "summary_generated_at": meeting.summary_generated_at,
+            "created_at": meeting.created_at,
+            "updated_at": meeting.updated_at
+        }
+        if include_transcript:
+            result["transcript"] = meeting.transcript
+        if include_summary:
+            result["summary_data"] = meeting.summary_data
+        return result
 
 
 # =============================================================================
