@@ -318,6 +318,89 @@ export interface EmailSummaryResponse {
 }
 
 // ============================================
+// Podcast Types
+// ============================================
+
+/**
+ * Podcast source type (where the transcript came from)
+ */
+export type PodcastSource = 'fireflies' | 'zoom' | 'manual';
+
+/**
+ * Podcast record from the library
+ * Matches backend PodcastResponse model
+ */
+export interface Podcast {
+  id: string;
+  external_id?: string | null;
+  source: PodcastSource;
+  title: string;
+  subject?: string | null;
+  organizer_email?: string | null;
+  podcast_date?: string | null;
+  duration_minutes?: number | null;
+  participants?: string[] | null;
+  transcript_length?: number | null;
+  pinecone_file_id?: string | null;
+  group_id?: string | null;
+  group_name?: string | null;
+  // Summary cache status
+  has_summary?: boolean;
+  summary_generated_at?: string | null;
+  // Source-specific metadata
+  source_metadata?: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Podcast with full transcript content
+ */
+export interface PodcastWithTranscript extends Podcast {
+  transcript?: string | null;
+}
+
+/**
+ * Paginated podcast list response
+ * Matches backend PodcastListResponse model
+ */
+export interface PodcastListResponse {
+  podcasts: Podcast[];
+  total: number;
+  page: number;
+  per_page: number;
+  has_more: boolean;
+}
+
+/**
+ * Request payload for moving a podcast to a different group
+ */
+export interface MovePodcastRequest {
+  group_id?: string | null;
+}
+
+/**
+ * Podcast summary response
+ */
+export interface PodcastSummaryResponse {
+  success: boolean;
+  podcast_id?: string | null;
+  podcast_title: string;
+  podcast_subject?: string | null;
+  podcast_date?: string | null;
+  participants?: string[] | null;
+  executive_summary: string;
+  key_takeaways: string[];
+  action_items: string[];
+  decisions_made: string[];
+  topics_discussed: string[];
+  metadata?: Record<string, unknown> | null;
+  error?: string | null;
+  cached?: boolean;
+  cached_at?: string | null;
+}
+
+// ============================================
 // API Error Types
 // ============================================
 

@@ -10,17 +10,20 @@ import {
   Clock,
   PlayCircle,
   Plus,
+  Mic,
 } from "lucide-react";
 import { useTranscripts, useMoveTranscript, useDeleteTranscript } from "@/hooks/useTranscripts";
+import { usePodcasts, useMovePodcast, useDeletePodcast } from "@/hooks/usePodcasts";
 import { useGroups, useCreateGroup, useUpdateGroup, useDeleteGroup } from "@/hooks/useGroups";
 import { useSelectedTranscript } from "@/hooks/useSelectedTranscript";
+import { useSelectedPodcast } from "@/hooks/useSelectedPodcast";
 import { useChatStore } from "@/hooks/useChat";
 import { CreateGroupDialog } from "./CreateGroupDialog";
 import { TranscriptContextMenu } from "./TranscriptContextMenu";
 import { GroupContextMenu } from "./GroupContextMenu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import type { Video } from "@/types/api";
+import type { Video, Podcast } from "@/types/api";
 
 /**
  * Helper to convert Tailwind color class to hex for API
@@ -70,6 +73,19 @@ function formatDuration(seconds: number | null | undefined): string {
 }
 
 /**
+ * Convert duration in minutes to HH:MM format
+ */
+function formatDurationMinutes(minutes: number | null | undefined): string {
+  if (!minutes) return "0:00";
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  if (hours > 0) {
+    return `${hours}h ${mins}m`;
+  }
+  return `${mins}m`;
+}
+
+/**
  * Sidebar skeleton component for loading state
  */
 function SidebarSkeleton() {
@@ -98,21 +114,29 @@ function SidebarSkeleton() {
 export function LeftSidebar() {
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
   const [recentExpanded, setRecentExpanded] = useState(true);
+  const [podcastsExpanded, setPodcastsExpanded] = useState(true);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
 
   // Fetch data from API using React Query hooks
   // useTranscripts returns VideoListResponse with videos array
   const { data: transcriptsData, isLoading: transcriptsLoading, error: transcriptsError } = useTranscripts();
+  const { data: podcastsData, isLoading: podcastsLoading, error: podcastsError } = usePodcasts();
   const { data: groups = [], isLoading: groupsLoading, error: groupsError } = useGroups();
 
   // Selected transcript state management
   const { selectedTranscript, setSelectedTranscript } = useSelectedTranscript();
+
+  // Selected podcast state management
+  const { selectedPodcast, setSelectedPodcast } = useSelectedPodcast();
 
   // Chat video filter - sync video selection with RAG context
   const setVideoFilter = useChatStore((state) => state.setVideoFilter);
 
   // Extract videos array from response, default to empty array
   const videos = transcriptsData?.videos ?? [];
+
+  // Extract podcasts array from response, default to empty array
+  const podcasts = podcastsData?.podcasts ?? [];
 
   // Auto-select the first (most recent) transcript when data loads
   // Only auto-select if no transcript is currently selected
@@ -127,7 +151,15 @@ export function LeftSidebar() {
   // Handle transcript selection
   const handleSelectTranscript = (video: Video) => {
     setSelectedTranscript(video);
+    setSelectedPodcast(null);  // Clear podcast selection when selecting a video
     setVideoFilter(video.id);  // Also set video context for RAG chat
+  };
+
+  // Handle podcast selection
+  const handleSelectPodcast = (podcast: Podcast) => {
+    setSelectedPodcast(podcast);
+    setSelectedTranscript(null);  // Clear transcript selection when selecting a podcast
+    setVideoFilter(null);  // Clear video filter for RAG chat
   };
 
   // Check if a video is currently selected
@@ -135,16 +167,23 @@ export function LeftSidebar() {
     return selectedTranscript?.id === videoId;
   };
 
+  // Check if a podcast is currently selected
+  const isPodcastSelected = (podcastId: string): boolean => {
+    return selectedPodcast?.id === podcastId;
+  };
+
   // Mutation hooks for data modifications
   const moveTranscriptMutation = useMoveTranscript();
   const deleteTranscriptMutation = useDeleteTranscript();
+  const movePodcastMutation = useMovePodcast();
+  const deletePodcastMutation = useDeletePodcast();
   const createGroupMutation = useCreateGroup();
   const updateGroupMutation = useUpdateGroup();
   const deleteGroupMutation = useDeleteGroup();
 
   // Combined loading state
-  const isLoading = transcriptsLoading || groupsLoading;
-  const hasError = transcriptsError || groupsError;
+  const isLoading = transcriptsLoading || groupsLoading || podcastsLoading;
+  const hasError = transcriptsError || groupsError || podcastsError;
 
   // Get ungrouped (recent) videos
   const recentVideos = videos.filter((v) => !v.group_id);
@@ -270,7 +309,7 @@ export function LeftSidebar() {
           <div className="w-3 h-3 rounded-full bg-green-400" />
         </div>
         <span className="text-xs text-muted-foreground ml-2">
-          {isLoading ? "Loading..." : `${videos.length} transcripts`}
+          {isLoading ? "Loading..." : `${videos.length} videos · ${podcasts.length} podcasts`}
         </span>
       </div>
 
@@ -479,6 +518,62 @@ export function LeftSidebar() {
                   </div>
                 );
               })}
+            </div>
+
+            {/* Podcasts Section */}
+            <div className="mb-2 mt-4">
+              <button
+                onClick={() => setPodcastsExpanded(!podcastsExpanded)}
+                className="sidebar-item w-full justify-between py-1.5"
+              >
+                <div className="flex items-center gap-3">
+                  <Mic className="w-4 h-4 text-purple-500" />
+                  <span className="text-sm font-medium">Podcasts</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">
+                    {podcasts.length}
+                  </span>
+                  {podcastsExpanded ? (
+                    <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
+                  ) : (
+                    <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
+                  )}
+                </div>
+              </button>
+              {podcastsExpanded && (
+                <div className="ml-4 mt-1 space-y-0.5">
+                  {podcasts.length === 0 ? (
+                    <p className="text-xxs text-muted-foreground px-3 py-2 italic">
+                      No podcasts yet
+                    </p>
+                  ) : (
+                    podcasts.map((podcast) => (
+                      <div
+                        key={podcast.id}
+                        onClick={() => handleSelectPodcast(podcast)}
+                        className={`sidebar-item py-1.5 group cursor-pointer ${
+                          isPodcastSelected(podcast.id)
+                            ? "bg-accent/50 text-accent-foreground"
+                            : ""
+                        }`}
+                      >
+                        <Mic className={`w-3.5 h-3.5 ${
+                          isPodcastSelected(podcast.id)
+                            ? "text-foreground"
+                            : "text-muted-foreground group-hover:text-foreground"
+                        }`} />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm truncate">{podcast.title}</p>
+                          <p className="text-xxs text-muted-foreground truncate">
+                            {podcast.source} · {formatDurationMinutes(podcast.duration_minutes)}
+                          </p>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
             </div>
 
             {/* New Group Button */}
