@@ -16,6 +16,10 @@ passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
 httpx==0.26.0
 
+# Authorizer Integration (JWKS validation)
+PyJWT[crypto]==2.8.0
+cachetools==5.3.2
+
 # Pinecone (v7+ has assistant built-in)
 pinecone>=7.0.0
 
