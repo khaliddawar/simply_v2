@@ -323,12 +323,19 @@ async def handle_transaction_completed(payload: Dict[str, Any]):
     Handle transaction.completed webhook - user has successfully paid.
     Updates user's subscription status in the database.
     """
-    data = payload.get('data', {})
+    data = payload.get('data') or {}
+    logger.info(f"Transaction data keys: {list(data.keys()) if data else 'None'}")
 
     # Extract user identification from custom_data
-    custom_data = data.get('custom_data', {})
-    user_id = custom_data.get('user_id') or custom_data.get('checkout_user_id')
-    user_email = custom_data.get('user_email')
+    custom_data = data.get('custom_data') or {}
+    logger.info(f"Custom data: {custom_data}")
+    user_id = custom_data.get('user_id') or custom_data.get('checkout_user_id') if custom_data else None
+    user_email = custom_data.get('user_email') if custom_data else None
+
+    # Also try to get email from customer object if not in custom_data
+    if not user_email:
+        customer = data.get('customer') or {}
+        user_email = customer.get('email') if customer else None
 
     # Get subscription details
     subscription_id = data.get('subscription_id')
@@ -377,37 +384,56 @@ async def handle_subscription_created(payload: Dict[str, Any]):
     """
     Handle subscription.created webhook.
     """
-    data = payload.get('data', {})
+    data = payload.get('data') or {}
     subscription_id = data.get('id')
     customer_id = data.get('customer_id')
     status = data.get('status')
 
-    custom_data = data.get('custom_data', {})
-    user_id = custom_data.get('user_id')
+    custom_data = data.get('custom_data') or {}
+    user_id = custom_data.get('user_id') if custom_data else None
 
-    logger.info(f"Subscription created - ID: {subscription_id}, Status: {status}, User: {user_id}")
+    # Try to get user email from customer object
+    user_email = None
+    customer = data.get('customer') or {}
+    if customer:
+        user_email = customer.get('email')
 
+    logger.info(f"Subscription created - ID: {subscription_id}, Status: {status}, User: {user_id}, Email: {user_email}")
+
+    db = await get_database_service()
+
+    # Try to find user by ID or email
+    user = None
     if user_id:
-        db = await get_database_service()
-        try:
-            await db.create_or_update_subscription(
-                user_id=user_id,
-                plan='premium',
-                status=status or 'active',
-                paddle_subscription_id=subscription_id,
-                paddle_customer_id=customer_id
-            )
-            await db.update_user(user_id, {'plan_type': 'premium'})
-            logger.info(f"Created subscription for user {user_id}")
-        except Exception as e:
-            logger.error(f"Error creating subscription: {e}")
+        user = await db.get_user_by_id(user_id)
+    if not user and user_email:
+        user = await db.get_user_by_email(user_email)
+
+    if not user:
+        logger.warning(f"No user found for subscription.created - user_id: {user_id}, email: {user_email}")
+        return
+
+    actual_user_id = user['id']
+
+    try:
+        await db.create_or_update_subscription(
+            user_id=actual_user_id,
+            plan='premium',
+            status=status or 'active',
+            paddle_subscription_id=subscription_id,
+            paddle_customer_id=customer_id
+        )
+        await db.update_user(actual_user_id, {'plan_type': 'premium'})
+        logger.info(f"Created subscription for user {actual_user_id}")
+    except Exception as e:
+        logger.error(f"Error creating subscription: {e}")
 
 
 async def handle_subscription_updated(payload: Dict[str, Any]):
     """
     Handle subscription.updated webhook.
     """
-    data = payload.get('data', {})
+    data = payload.get('data') or {}
     subscription_id = data.get('id')
     status = data.get('status')
 
@@ -429,7 +455,7 @@ async def handle_subscription_cancelled(payload: Dict[str, Any]):
     Handle subscription.cancelled webhook.
     Downgrades user to free plan.
     """
-    data = payload.get('data', {})
+    data = payload.get('data') or {}
     subscription_id = data.get('id')
 
     logger.info(f"Subscription cancelled - ID: {subscription_id}")
