@@ -65,6 +65,7 @@ class FirefliesService:
             return None
 
         # GraphQL query to fetch complete transcript details
+        # Note: video_url requires Business plan, so we skip it
         query = """
         query Transcript($transcriptId: String!) {
             transcript(id: $transcriptId) {
@@ -79,7 +80,6 @@ class FirefliesService:
                 fireflies_users
                 transcript_url
                 audio_url
-                video_url
                 speakers {
                     id
                     name
