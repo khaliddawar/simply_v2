@@ -34,18 +34,27 @@ def verify_fireflies_signature(raw_body: bytes, signature_header: str, webhook_s
     """
     Verify Fireflies webhook signature.
     Fireflies uses HMAC-SHA256 for webhook verification.
+    Signature header may be in format: sha256=<hex_digest> or just <hex_digest>
     """
     if not signature_header or not webhook_secret:
         return False
 
     try:
+        # Handle sha256= prefix if present
+        if signature_header.startswith("sha256="):
+            provided_signature = signature_header[7:]  # Remove 'sha256=' prefix
+        else:
+            provided_signature = signature_header
+
         expected_signature = hmac.new(
             webhook_secret.encode('utf-8'),
             raw_body,
             hashlib.sha256
         ).hexdigest()
 
-        return hmac.compare_digest(expected_signature, signature_header)
+        logger.debug(f"Signature verification - provided: {provided_signature[:20]}..., expected: {expected_signature[:20]}...")
+
+        return hmac.compare_digest(expected_signature, provided_signature)
     except Exception as e:
         logger.error(f"Error verifying Fireflies signature: {e}")
         return False
@@ -116,9 +125,11 @@ async def fireflies_webhook(
             logger.warning("Missing x-hub-signature header")
             return WebhookResponse(success=False, message="Missing signature", error="Missing x-hub-signature header")
 
+        logger.info(f"Verifying signature: header={x_hub_signature[:30]}... secret_configured=True")
         if not verify_fireflies_signature(body, x_hub_signature, settings.fireflies_webhook_secret):
-            logger.warning("Invalid Fireflies signature")
+            logger.warning(f"Invalid Fireflies signature - header value: {x_hub_signature}")
             return WebhookResponse(success=False, message="Invalid signature", error="Signature verification failed")
+        logger.info("Fireflies signature verified successfully")
     else:
         logger.warning("Fireflies webhook secret not configured - skipping signature verification")
 
