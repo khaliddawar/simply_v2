@@ -94,3 +94,18 @@ class CancelSubscriptionResponse(BaseModel):
     message: str
     cancelled_at: Optional[datetime] = None
     cancel_at_period_end: bool = False
+
+
+class UpgradeRequest(BaseModel):
+    """Request to initiate upgrade from extension"""
+    plan: str = "premium"
+    billing_cycle: str = "monthly"
+    return_url: Optional[str] = None
+
+
+class UpgradeResponse(BaseModel):
+    """Response with Paddle checkout URL"""
+    success: bool
+    checkout_url: Optional[str] = None
+    message: Optional[str] = None
+    error: Optional[str] = None
