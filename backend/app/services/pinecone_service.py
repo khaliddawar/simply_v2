@@ -170,6 +170,10 @@ class PineconeService:
             if video_id:
                 filter_dict["video_id"] = video_id
 
+            logger.info(f"RAG search - user_id: {user_id}, video_id: {video_id}, group_id: {group_id}")
+            logger.info(f"RAG search - full filter: {filter_dict}")
+            logger.info(f"RAG search - query: {query[:100]}...")
+
             # Build message list
             messages = []
 
@@ -187,10 +191,12 @@ class PineconeService:
             messages.append(Message(role="user", content=query))
 
             # Chat with assistant
+            logger.info(f"RAG search - calling assistant.chat with {len(messages)} messages")
             response = self.assistant.chat(
                 messages=messages,
                 filter=filter_dict
             )
+            logger.info(f"RAG search - response received, citations: {len(response.citations) if hasattr(response, 'citations') and response.citations else 0}")
 
             # Extract citations if available
             citations = []
@@ -306,20 +312,29 @@ class PineconeService:
             return {"success": False, "error": "Pinecone service not initialized"}
 
         try:
-            filter_dict = {"user_id": user_id}
-            if group_id:
-                filter_dict["group_id"] = group_id
-
-            files = self.assistant.list_files(filter=filter_dict)
+            # Note: Pinecone Assistant list_files might not support filtering
+            # List all files and filter client-side
+            files = self.assistant.list_files()
+            logger.info(f"Pinecone list_files returned {len(files) if files else 0} total files")
 
             file_list = []
             for f in files:
-                file_list.append({
-                    "id": f.id,
-                    "name": f.name,
-                    "status": f.status,
-                    "metadata": f.metadata if hasattr(f, 'metadata') else {}
-                })
+                metadata = f.metadata if hasattr(f, 'metadata') else {}
+                file_user_id = metadata.get("user_id") if isinstance(metadata, dict) else None
+
+                # Log each file for debugging
+                logger.debug(f"File: {f.name}, user_id: {file_user_id}, metadata: {metadata}")
+
+                # Filter by user_id client-side
+                if file_user_id == user_id:
+                    file_list.append({
+                        "id": f.id,
+                        "name": f.name,
+                        "status": f.status,
+                        "metadata": metadata
+                    })
+
+            logger.info(f"Found {len(file_list)} files for user {user_id}")
 
             return {
                 "success": True,

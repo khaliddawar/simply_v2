@@ -102,6 +102,59 @@ async def chat_with_knowledge(
     )
 
 
+@router.get("/debug/files")
+async def list_pinecone_files(
+    show_all: bool = Query(False, description="Show all files in Pinecone (not filtered by user)"),
+    user_id: str = Depends(get_current_user_id_optional)
+):
+    """
+    Debug endpoint: List Pinecone files to verify indexing.
+    Shows video_id metadata to check podcast indexing format.
+
+    - Default: Shows only files for current user
+    - show_all=true: Shows ALL files in Pinecone (useful for debugging)
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    pinecone_service = get_pinecone_service()
+
+    if show_all:
+        # List all files without user filter
+        try:
+            files = pinecone_service.assistant.list_files()
+            file_list = []
+            for f in files:
+                metadata = f.metadata if hasattr(f, 'metadata') else {}
+                file_list.append({
+                    "id": f.id,
+                    "name": f.name,
+                    "status": f.status,
+                    "metadata": metadata
+                })
+            return {
+                "files": file_list,
+                "total": len(file_list),
+                "mode": "all_files"
+            }
+        except Exception as e:
+            logger.error(f"Error listing all files: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # Normal user-filtered list
+    result = await pinecone_service.list_user_files(user_id=user_id)
+
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error"))
+
+    # Return files with metadata to see video_id format
+    return {
+        "files": result.get("files", []),
+        "total": result.get("total", 0),
+        "user_id": user_id,
+        "mode": "user_filtered"
+    }
+
+
 @router.post("/summary", response_model=SummaryResponse)
 async def generate_summary(
     request: SummaryRequest,
