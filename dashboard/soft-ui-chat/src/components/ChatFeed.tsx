@@ -7,6 +7,7 @@ import { ChatMessage } from "./ChatMessage";
 import { ChatInput } from "./ChatInput";
 import { TranscriptHeader } from "./TranscriptHeader";
 import { ThinkingIndicator } from "./ThinkingIndicator";
+import { UserProfileDropdown } from "./UserProfileDropdown";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -166,6 +167,12 @@ export function ChatFeed() {
               <Trash2 className="w-4 h-4" />
             </Button>
           )}
+
+          {/* Separator */}
+          <div className="h-6 w-px bg-border/50 mx-1" />
+
+          {/* User profile dropdown */}
+          <UserProfileDropdown />
         </div>
       </header>
 
