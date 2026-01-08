@@ -133,10 +133,147 @@ async def register(user_data: UserCreate):
     """
     Register a new user with email and password.
 
+    Creates user in both Authorizer (for unified auth) and TubeVibe database.
     Returns access token and user data on success.
     """
-    auth_service = get_auth_service()
+    import httpx
+    import logging
 
+    settings = get_settings()
+    auth_service = get_auth_service()
+    email = user_data.email.lower().strip()
+
+    # If Authorizer is configured, register there first for unified auth
+    if settings.authorizer_url:
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                # Sign up via Authorizer GraphQL
+                signup_mutation = '''
+                mutation Signup($params: SignUpInput!) {
+                    signup(params: $params) {
+                        message
+                        user { id email }
+                        access_token
+                        id_token
+                    }
+                }
+                '''
+
+                signup_resp = await client.post(
+                    f'{settings.authorizer_url}/graphql',
+                    headers={'Content-Type': 'application/json'},
+                    json={
+                        'query': signup_mutation,
+                        'variables': {
+                            'params': {
+                                'email': email,
+                                'password': user_data.password,
+                                'confirm_password': user_data.password,
+                                'given_name': user_data.first_name or email.split('@')[0],
+                                'family_name': user_data.last_name or ''
+                            }
+                        }
+                    }
+                )
+
+                signup_result = signup_resp.json() if signup_resp.status_code == 200 else {}
+
+                # Check for errors in GraphQL response
+                if signup_result.get('errors'):
+                    error_msg = signup_result['errors'][0].get('message', 'Registration failed')
+                    if 'already exists' in error_msg.lower() or 'already signed up' in error_msg.lower():
+                        raise HTTPException(status_code=400, detail="Email already registered. Please login instead.")
+                    raise HTTPException(status_code=400, detail=error_msg)
+
+                signup_data = signup_result.get('data', {}).get('signup', {})
+                authorizer_user = signup_data.get('user')
+                access_token = signup_data.get('access_token')
+
+                if not authorizer_user:
+                    raise Exception("Authorizer signup returned no user")
+
+                authorizer_user_id = authorizer_user.get('id')
+
+                # Auto-verify email (Railway blocks SMTP so we can't send verification emails)
+                if settings.authorizer_admin_secret:
+                    # Admin login first
+                    login_mutation = '''
+                    mutation AdminLogin($params: AdminLoginInput!) {
+                        _admin_login(params: $params) { message }
+                    }
+                    '''
+                    await client.post(
+                        f'{settings.authorizer_url}/graphql',
+                        headers={'Content-Type': 'application/json'},
+                        json={
+                            'query': login_mutation,
+                            'variables': {'params': {'admin_secret': settings.authorizer_admin_secret}}
+                        }
+                    )
+                    # Verify email
+                    update_mutation = '''
+                    mutation UpdateUser($params: UpdateUserInput!) {
+                        _update_user(params: $params) { id email_verified }
+                    }
+                    '''
+                    await client.post(
+                        f'{settings.authorizer_url}/graphql',
+                        headers={'Content-Type': 'application/json'},
+                        json={
+                            'query': update_mutation,
+                            'variables': {
+                                'params': {
+                                    'id': authorizer_user_id,
+                                    'email_verified': True
+                                }
+                            }
+                        }
+                    )
+
+                # Create or link TubeVibe user
+                authorizer_service = get_authorizer_service()
+                user = await authorizer_service.get_or_create_tubevibe_user(
+                    authorizer_user_id=authorizer_user_id,
+                    email=email,
+                    given_name=user_data.first_name,
+                    family_name=user_data.last_name
+                )
+
+                if not user:
+                    raise HTTPException(status_code=500, detail="Failed to create user in database")
+
+                # Store password hash locally for legacy fallback
+                if auth_service.db:
+                    password_hash = auth_service.hash_password(user_data.password)
+                    await auth_service.db.update_user(user["id"], {
+                        "password_hash": password_hash,
+                        "auth_provider": "authorizer"
+                    })
+
+                # Use our JWT for API access (more reliable than Authorizer token)
+                jwt_token = auth_service.create_access_token(user["id"])
+
+                return TokenResponse(
+                    access_token=jwt_token,
+                    token_type="bearer",
+                    expires_in=auth_service.access_token_expire_minutes * 60,
+                    user=UserResponse(
+                        id=user["id"],
+                        email=user["email"],
+                        first_name=user.get("first_name"),
+                        last_name=user.get("last_name"),
+                        plan_type=user.get("plan_type", "free"),
+                        pinecone_namespace=user.get("pinecone_namespace")
+                    )
+                )
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logging.error(f"Authorizer registration failed, falling back to legacy: {e}")
+            # Fall through to legacy registration
+
+    # Legacy registration (fallback if Authorizer not configured or fails)
     result = await auth_service.register_user(
         email=user_data.email,
         password=user_data.password,
@@ -160,10 +297,102 @@ async def login(credentials: UserLogin):
     """
     Authenticate user with email and password.
 
+    Tries Authorizer authentication first (unified auth), falls back to legacy.
     Returns access token and user data on success.
     """
-    auth_service = get_auth_service()
+    import httpx
+    import logging
 
+    settings = get_settings()
+    auth_service = get_auth_service()
+    email = credentials.email.lower().strip()
+
+    # If Authorizer is configured, try authenticating there first
+    if settings.authorizer_url:
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                # Login via Authorizer GraphQL
+                login_mutation = '''
+                mutation Login($params: LoginInput!) {
+                    login(params: $params) {
+                        message
+                        user { id email given_name family_name }
+                        access_token
+                        id_token
+                    }
+                }
+                '''
+
+                login_resp = await client.post(
+                    f'{settings.authorizer_url}/graphql',
+                    headers={'Content-Type': 'application/json'},
+                    json={
+                        'query': login_mutation,
+                        'variables': {
+                            'params': {
+                                'email': email,
+                                'password': credentials.password
+                            }
+                        }
+                    }
+                )
+
+                login_result = login_resp.json() if login_resp.status_code == 200 else {}
+
+                # Check for errors in GraphQL response
+                if login_result.get('errors'):
+                    error_msg = login_result['errors'][0].get('message', 'Login failed')
+                    # If user not found in Authorizer, fall through to legacy auth
+                    if 'not found' in error_msg.lower() or 'invalid credentials' in error_msg.lower():
+                        logging.info(f"User {email} not found in Authorizer, trying legacy auth")
+                        raise Exception("User not in Authorizer")
+                    raise HTTPException(status_code=401, detail=error_msg)
+
+                login_data = login_result.get('data', {}).get('login', {})
+                authorizer_user = login_data.get('user')
+                access_token = login_data.get('access_token')
+
+                if authorizer_user and access_token:
+                    authorizer_user_id = authorizer_user.get('id')
+
+                    # Get or create TubeVibe user linked to this Authorizer account
+                    authorizer_service = get_authorizer_service()
+                    user = await authorizer_service.get_or_create_tubevibe_user(
+                        authorizer_user_id=authorizer_user_id,
+                        email=email,
+                        given_name=authorizer_user.get('given_name'),
+                        family_name=authorizer_user.get('family_name')
+                    )
+
+                    if not user:
+                        raise HTTPException(status_code=500, detail="Failed to sync user with database")
+
+                    # Use our JWT for API access
+                    jwt_token = auth_service.create_access_token(user["id"])
+
+                    return TokenResponse(
+                        access_token=jwt_token,
+                        token_type="bearer",
+                        expires_in=auth_service.access_token_expire_minutes * 60,
+                        user=UserResponse(
+                            id=user["id"],
+                            email=user["email"],
+                            first_name=user.get("first_name"),
+                            last_name=user.get("last_name"),
+                            plan_type=user.get("plan_type", "free"),
+                            pinecone_namespace=user.get("pinecone_namespace")
+                        )
+                    )
+                else:
+                    raise Exception("Authorizer login returned no user or token")
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logging.info(f"Authorizer login failed for {email}, trying legacy: {e}")
+            # Fall through to legacy authentication
+
+    # Legacy authentication (fallback if Authorizer not configured or user not found)
     result = await auth_service.login_user(
         email=credentials.email,
         password=credentials.password
