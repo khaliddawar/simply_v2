@@ -159,16 +159,17 @@ class PineconeService:
         try:
             from pinecone_plugins.assistant.models.chat import Message
 
-            # Build metadata filter for user isolation
-            filter_dict = {"user_id": user_id}
+            # Build metadata filter for user isolation using Pinecone's operator syntax
+            # Pinecone Assistant requires $eq, $ne, $gt, $gte, $lt, $lte, $in, $nin operators
+            filter_dict = {"user_id": {"$eq": user_id}}
 
             # Add group filter if specified
             if group_id:
-                filter_dict["group_id"] = group_id
+                filter_dict["group_id"] = {"$eq": group_id}
 
             # Add video filter if specified (overrides group filter for specificity)
             if video_id:
-                filter_dict["video_id"] = video_id
+                filter_dict["video_id"] = {"$eq": video_id}
 
             logger.info(f"RAG search - user_id: {user_id}, video_id: {video_id}, group_id: {group_id}")
             logger.info(f"RAG search - full filter: {filter_dict}")
@@ -240,10 +241,10 @@ class PineconeService:
             return {"success": False, "error": "Pinecone service not initialized"}
 
         try:
-            # Filter for specific video
+            # Filter for specific video using Pinecone's operator syntax
             filter_dict = {
-                "user_id": user_id,
-                "video_id": video_id
+                "user_id": {"$eq": user_id},
+                "video_id": {"$eq": video_id}
             }
 
             # Use context API
