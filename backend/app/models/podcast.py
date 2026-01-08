@@ -207,19 +207,26 @@ class PodcastListResponse(BaseModel):
     has_more: bool
 
 
+class SectionSummary(BaseModel):
+    """Individual section summary from Chain of Density"""
+    title: str
+    timestamp: str
+    description: str
+    summary: str
+    key_points: List[str] = []
+    entities: List[str] = []
+
+
 class PodcastSummaryResponse(BaseModel):
-    """Summary response for podcast transcript"""
+    """Summary response for podcast transcript (matches video format)"""
     success: bool
     podcast_id: Optional[str] = None
     podcast_title: str
-    podcast_subject: Optional[str] = None
-    podcast_date: Optional[str] = None
-    participants: Optional[List[str]] = []
     executive_summary: str
     key_takeaways: List[str] = []
-    action_items: List[str] = []
-    decisions_made: List[str] = []
-    topics_discussed: List[str] = []
+    target_audience: str = ""
+    sections: List[SectionSummary] = []
+    total_sections: int = 0
     metadata: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     cached: bool = False

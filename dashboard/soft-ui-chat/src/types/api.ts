@@ -380,21 +380,18 @@ export interface MovePodcastRequest {
 }
 
 /**
- * Podcast summary response
+ * Podcast summary response (matches video format for consistent UX)
  */
 export interface PodcastSummaryResponse {
   success: boolean;
   podcast_id?: string | null;
   podcast_title: string;
-  podcast_subject?: string | null;
-  podcast_date?: string | null;
-  participants?: string[] | null;
   executive_summary: string;
   key_takeaways: string[];
-  action_items: string[];
-  decisions_made: string[];
-  topics_discussed: string[];
-  metadata?: Record<string, unknown> | null;
+  target_audience: string;
+  sections: SectionSummary[];
+  total_sections: number;
+  metadata?: SummaryMetadata | null;
   error?: string | null;
   cached?: boolean;
   cached_at?: string | null;

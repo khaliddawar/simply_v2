@@ -6,6 +6,8 @@ import type {
   PodcastWithTranscript,
   MovePodcastRequest,
   PodcastSummaryResponse,
+  EmailSummaryRequest,
+  EmailSummaryResponse,
 } from "@/types/api";
 
 /**
@@ -98,7 +100,7 @@ export function useMovePodcast() {
 
 /**
  * Hook to generate a summary for a podcast
- * Calls the backend summarization service
+ * Calls the backend summarization service (uses same Chain of Density pipeline as videos)
  *
  * @param forceRegenerate - If true, regenerates summary even if cached version exists
  */
@@ -114,6 +116,28 @@ export function useGeneratePodcastSummary() {
       const { data } = await api.get(`/api/podcasts/${podcastId}/summary`, {
         params: { force_regenerate: forceRegenerate },
       });
+      return data;
+    },
+  });
+}
+
+/**
+ * Hook to email a podcast summary
+ * Sends the summary HTML to the specified email address
+ */
+export function useEmailPodcastSummary() {
+  return useMutation({
+    mutationFn: async ({
+      podcastId,
+      request,
+    }: {
+      podcastId: string;
+      request: EmailSummaryRequest;
+    }): Promise<EmailSummaryResponse> => {
+      const { data } = await api.post(
+        `/api/podcasts/${podcastId}/email-summary`,
+        request
+      );
       return data;
     },
   });

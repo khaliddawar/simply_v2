@@ -10,6 +10,7 @@ from app.routes.auth import get_current_user_id
 from app.services.podcast_service import get_podcast_service
 from app.services.database_service import get_database_service
 from app.services.summarization_service import get_summarization_service
+from app.services.email_service import get_email_service
 from app.models.podcast import (
     PodcastCreate,
     PodcastResponse,
@@ -18,6 +19,7 @@ from app.models.podcast import (
     PodcastSource,
     PodcastSummaryResponse
 )
+from app.models.video import EmailSummaryRequest, EmailSummaryResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -212,14 +214,15 @@ async def get_podcast_summary(
     """
     Get or generate a structured summary for a podcast.
 
+    Uses the same Chain of Density summarization pipeline as videos:
+    1. Detects topic sections in the transcript
+    2. Applies Chain of Density summarization to each section
+    3. Generates an executive summary with key takeaways
+
     Summary Caching:
     - Summaries are cached after first generation to avoid repeated LLM calls
     - Use force_regenerate=true to regenerate and update the cached summary
     - Cached summaries are returned instantly without any LLM calls
-
-    Generation Process (when not cached or force_regenerate=true):
-    - Analyzes the transcript to extract key information
-    - Generates executive summary, key takeaways, action items, decisions, and topics
     """
     db = await get_database_service()
     podcast_service = get_podcast_service()
@@ -262,22 +265,19 @@ async def get_podcast_summary(
             detail="No transcript available for this podcast"
         )
 
-    # Generate fresh summary
+    # Generate fresh summary using the same pipeline as videos (Chain of Density)
     logger.info(f"Generating fresh summary for podcast {podcast_id} (force_regenerate={force_regenerate})")
 
-    # Format podcast_date for the summary
-    podcast_date_str = None
-    if podcast.get("podcast_date"):
-        podcast_date_str = podcast["podcast_date"].strftime("%Y-%m-%d") if hasattr(podcast["podcast_date"], 'strftime') else str(podcast["podcast_date"])
-
-    summary_result = await summarization_service.generate_podcast_summary(
+    summary_result = await summarization_service.generate_summary(
         transcript=transcript,
-        podcast_title=podcast.get("title", "Untitled Podcast"),
-        podcast_id=podcast_id,
-        podcast_subject=podcast.get("subject"),
-        podcast_date=podcast_date_str,
-        participants=podcast.get("participants")
+        video_title=podcast.get("title", "Untitled Podcast"),
+        video_id=podcast_id
     )
+
+    # Map video response fields to podcast response fields
+    if summary_result.get("success"):
+        summary_result["podcast_id"] = summary_result.pop("video_id", podcast_id)
+        summary_result["podcast_title"] = summary_result.pop("video_title", podcast.get("title", "Untitled Podcast"))
 
     if not summary_result.get("success"):
         raise HTTPException(
@@ -301,6 +301,65 @@ async def get_podcast_summary(
     summary_result["cached"] = False
 
     return PodcastSummaryResponse(**summary_result)
+
+
+@router.post("/{podcast_id}/email-summary", response_model=EmailSummaryResponse)
+async def email_podcast_summary(
+    podcast_id: str,
+    request: EmailSummaryRequest,
+    user_id: str = Depends(get_current_user_id)
+):
+    """
+    Send a podcast summary via email.
+
+    This endpoint sends the provided summary HTML to the specified email address
+    using the Postmark email service.
+    """
+    email_service = get_email_service()
+    podcast_service = get_podcast_service()
+    db = await get_database_service()
+    podcast_service.set_database(db)
+
+    # Check if email service is available
+    if not email_service.is_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Email service not available - Postmark API key not configured"
+        )
+
+    # Get podcast metadata
+    podcast = await podcast_service.get_podcast(
+        podcast_id=podcast_id,
+        user_id=user_id,
+        include_transcript=False
+    )
+
+    if not podcast:
+        raise HTTPException(status_code=404, detail="Podcast not found")
+
+    # Convert duration from minutes to seconds for email template
+    duration_seconds = None
+    if podcast.get("duration_minutes"):
+        duration_seconds = podcast["duration_minutes"] * 60
+
+    # Send email
+    email_result = await email_service.send_summary_email(
+        recipient_email=request.recipient_email,
+        video_title=request.video_title or podcast.get("title", "Podcast Summary"),
+        summary_html=request.summary_html,
+        video_id=podcast_id,  # Use podcast_id as the ID
+        channel_name=request.channel_name or podcast.get("subject"),
+        duration_seconds=request.duration_seconds or duration_seconds,
+        transcript_length=request.transcript_length or podcast.get("transcript_length")
+    )
+
+    if not email_result.get("success"):
+        raise HTTPException(
+            status_code=500,
+            detail=email_result.get("error", "Failed to send email")
+        )
+
+    return EmailSummaryResponse(**email_result)
 
 
 @router.get("/stats/summary")

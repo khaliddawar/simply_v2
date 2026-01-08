@@ -2,7 +2,7 @@
  * Podcast Details Panel Component
  *
  * Displays selected podcast information with metadata
- * and quick actions.
+ * and quick actions. Uses same summary format as videos.
  */
 import { useState } from 'react';
 import {
@@ -11,18 +11,16 @@ import {
   Calendar,
   Clock,
   FileText,
+  Mail,
   Trash2,
   Sparkles,
   Loader2,
   Users,
   RefreshCw,
   CheckCircle,
-  ListTodo,
-  MessageSquare,
-  Lightbulb,
 } from 'lucide-react';
 import { useSelectedPodcast } from '@/hooks/useSelectedPodcast';
-import { useDeletePodcast, useGeneratePodcastSummary } from '@/hooks/usePodcasts';
+import { useDeletePodcast, useGeneratePodcastSummary, useEmailPodcastSummary } from '@/hooks/usePodcasts';
 import { toast } from 'sonner';
 import {
   Dialog,
@@ -32,6 +30,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import type { PodcastSummaryResponse } from '@/types/api';
 
@@ -86,10 +85,13 @@ export function PodcastDetailsPanel() {
   const { selectedPodcast, clearSelection } = useSelectedPodcast();
   const deletePodcast = useDeletePodcast();
   const generateSummary = useGeneratePodcastSummary();
+  const emailSummary = useEmailPodcastSummary();
 
   const [isDeleting, setIsDeleting] = useState(false);
   const [showSummaryDialog, setShowSummaryDialog] = useState(false);
+  const [showEmailDialog, setShowEmailDialog] = useState(false);
   const [summary, setSummary] = useState<PodcastSummaryResponse | null>(null);
+  const [emailAddress, setEmailAddress] = useState('');
 
   if (!selectedPodcast) {
     return null;
@@ -129,6 +131,79 @@ export function PodcastDetailsPanel() {
       toast.error('Failed to generate summary. Please try again.');
     }
   };
+
+  const handleEmailSummary = () => {
+    if (!summary) {
+      toast.info('Please generate a summary first');
+      return;
+    }
+    setShowEmailDialog(true);
+  };
+
+  const handleSendEmail = async () => {
+    if (!emailAddress || !summary) return;
+
+    const summaryHtml = formatSummaryHtml(summary);
+    try {
+      const result = await emailSummary.mutateAsync({
+        podcastId: id,
+        request: {
+          recipient_email: emailAddress,
+          summary_html: summaryHtml,
+          video_title: title,
+          channel_name: subject || undefined,
+          duration_seconds: duration_minutes ? duration_minutes * 60 : undefined,
+          transcript_length: transcript_length || undefined,
+        },
+      });
+
+      if (result.success) {
+        toast.success(`Summary sent to ${emailAddress}`);
+        setShowEmailDialog(false);
+        setEmailAddress('');
+      } else {
+        toast.error(result.error || 'Failed to send email');
+      }
+    } catch {
+      toast.error('Failed to send email. Please try again.');
+    }
+  };
+
+  /**
+   * Format summary as HTML for email
+   */
+  function formatSummaryHtml(s: PodcastSummaryResponse): string {
+    let html = `<h2>Overview</h2><p>${s.executive_summary}</p>`;
+
+    if (s.key_takeaways.length > 0) {
+      html += '<h3>Key Takeaways</h3><ul>';
+      s.key_takeaways.forEach((t) => {
+        html += `<li>${t}</li>`;
+      });
+      html += '</ul>';
+    }
+
+    if (s.target_audience) {
+      html += `<p><strong>Who this is for:</strong> ${s.target_audience}</p>`;
+    }
+
+    if (s.sections.length > 0) {
+      html += '<h3>Detailed Breakdown</h3>';
+      s.sections.forEach((section) => {
+        html += `<h4>${section.title} (${section.timestamp})</h4>`;
+        html += `<p>${section.summary}</p>`;
+        if (section.key_points.length > 0) {
+          html += '<ul>';
+          section.key_points.forEach((p) => {
+            html += `<li>${p}</li>`;
+          });
+          html += '</ul>';
+        }
+      });
+    }
+
+    return html;
+  }
 
   const handleDelete = async () => {
     if (!confirm('Are you sure you want to delete this podcast from your library?')) {
@@ -279,6 +354,18 @@ export function PodcastDetailsPanel() {
       <div className="p-4 flex-1">
         <h3 className="text-xs font-semibold text-foreground mb-3">Quick Actions</h3>
         <div className="space-y-2">
+          {/* Email Summary */}
+          <button
+            onClick={handleEmailSummary}
+            disabled={!summary || emailSummary.isPending}
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg border border-border/50
+                       text-xs text-foreground hover:bg-accent transition-colors
+                       disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Mail className="w-3.5 h-3.5 text-muted-foreground" />
+            {summary ? 'Email Summary' : 'Email Summary (generate first)'}
+          </button>
+
           {/* Delete */}
           <button
             onClick={handleDelete}
@@ -329,8 +416,7 @@ export function PodcastDetailsPanel() {
               {/* Key Takeaways */}
               {summary.key_takeaways.length > 0 && (
                 <div>
-                  <h3 className="text-sm font-semibold text-foreground mb-2 flex items-center gap-2">
-                    <Lightbulb className="w-4 h-4 text-yellow-500" />
+                  <h3 className="text-sm font-semibold text-foreground mb-2">
                     Key Takeaways
                   </h3>
                   <ul className="space-y-1.5">
@@ -347,79 +433,59 @@ export function PodcastDetailsPanel() {
                 </div>
               )}
 
-              {/* Action Items */}
-              {summary.action_items.length > 0 && (
-                <div>
-                  <h3 className="text-sm font-semibold text-foreground mb-2 flex items-center gap-2">
-                    <ListTodo className="w-4 h-4 text-blue-500" />
-                    Action Items
-                  </h3>
-                  <ul className="space-y-1.5">
-                    {summary.action_items.map((item, i) => (
-                      <li
-                        key={i}
-                        className="text-sm text-muted-foreground flex items-start gap-2"
-                      >
-                        <span className="text-blue-500 mt-0.5">□</span>
-                        {item}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              {/* Decisions Made */}
-              {summary.decisions_made.length > 0 && (
-                <div>
-                  <h3 className="text-sm font-semibold text-foreground mb-2 flex items-center gap-2">
-                    <CheckCircle className="w-4 h-4 text-green-500" />
-                    Decisions Made
-                  </h3>
-                  <ul className="space-y-1.5">
-                    {summary.decisions_made.map((decision, i) => (
-                      <li
-                        key={i}
-                        className="text-sm text-muted-foreground flex items-start gap-2"
-                      >
-                        <span className="text-green-500 mt-0.5">✓</span>
-                        {decision}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              {/* Topics Discussed */}
-              {summary.topics_discussed.length > 0 && (
-                <div>
-                  <h3 className="text-sm font-semibold text-foreground mb-2 flex items-center gap-2">
-                    <MessageSquare className="w-4 h-4 text-purple-500" />
-                    Topics Discussed
-                  </h3>
-                  <div className="flex flex-wrap gap-2">
-                    {summary.topics_discussed.map((topic, i) => (
-                      <span
-                        key={i}
-                        className="text-xs bg-accent text-muted-foreground px-2 py-1 rounded"
-                      >
-                        {topic}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Participants */}
-              {summary.participants && summary.participants.length > 0 && (
+              {/* Target Audience */}
+              {summary.target_audience && (
                 <div className="flex items-start gap-2 p-3 bg-accent/50 rounded-lg">
                   <Users className="w-4 h-4 text-muted-foreground mt-0.5" />
                   <div>
                     <span className="text-xs font-medium text-foreground">
-                      Participants:
+                      Who this is for:
                     </span>
                     <p className="text-sm text-muted-foreground">
-                      {summary.participants.join(', ')}
+                      {summary.target_audience}
                     </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Sections */}
+              {summary.sections.length > 0 && (
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground mb-3">
+                    Detailed Breakdown ({summary.total_sections} sections)
+                  </h3>
+                  <div className="space-y-4">
+                    {summary.sections.map((section, i) => (
+                      <div
+                        key={i}
+                        className="border border-border/50 rounded-lg p-3"
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <h4 className="text-sm font-medium text-foreground">
+                            {section.title}
+                          </h4>
+                          <span className="text-xs text-muted-foreground bg-accent px-2 py-0.5 rounded">
+                            {section.timestamp}
+                          </span>
+                        </div>
+                        <p className="text-sm text-muted-foreground mb-2">
+                          {section.summary}
+                        </p>
+                        {section.key_points.length > 0 && (
+                          <ul className="space-y-1">
+                            {section.key_points.map((point, j) => (
+                              <li
+                                key={j}
+                                className="text-xs text-muted-foreground flex items-start gap-1.5"
+                              >
+                                <span className="text-primary">–</span>
+                                {point}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
@@ -443,6 +509,70 @@ export function PodcastDetailsPanel() {
             >
               <RefreshCw className="w-4 h-4 mr-2" />
               Regenerate
+            </Button>
+            <Button onClick={handleEmailSummary} disabled={emailSummary.isPending}>
+              <Mail className="w-4 h-4 mr-2" />
+              Email Summary
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Email Dialog */}
+      <Dialog open={showEmailDialog} onOpenChange={setShowEmailDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Mail className="w-5 h-5 text-primary" />
+              Email Summary
+            </DialogTitle>
+            <DialogDescription>
+              Send the podcast summary to an email address.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="py-4">
+            <label
+              htmlFor="email"
+              className="text-sm font-medium text-foreground mb-2 block"
+            >
+              Email address
+            </label>
+            <Input
+              id="email"
+              type="email"
+              placeholder="Enter email address"
+              value={emailAddress}
+              onChange={(e) => setEmailAddress(e.target.value)}
+              className="w-full"
+            />
+          </div>
+
+          <DialogFooter className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowEmailDialog(false);
+                setEmailAddress('');
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSendEmail}
+              disabled={!emailAddress || emailSummary.isPending}
+            >
+              {emailSummary.isPending ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Sending...
+                </>
+              ) : (
+                <>
+                  <Mail className="w-4 h-4 mr-2" />
+                  Send Email
+                </>
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>
