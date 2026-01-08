@@ -159,7 +159,7 @@ export function LeftSidebar() {
   const handleSelectPodcast = (podcast: Podcast) => {
     setSelectedPodcast(podcast);
     setSelectedTranscript(null);  // Clear transcript selection when selecting a podcast
-    setVideoFilter(null);  // Clear video filter for RAG chat
+    setVideoFilter(`podcast_${podcast.id}`);  // Set podcast context for RAG chat (matches Pinecone video_id)
   };
 
   // Check if a video is currently selected
