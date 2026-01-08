@@ -216,8 +216,9 @@ async def get_subscription(user_id: str = Depends(get_current_user_id_optional))
     # Get user's subscription from database
     try:
         user = await db.get_user_by_id(user_id)
-        if user and user.get('subscription_plan'):
-            plan = user.get('subscription_plan', 'free')
+        if user:
+            # Check plan_type field (updated by webhook) or fall back to subscription_plan
+            plan = user.get('plan_type') or user.get('subscription_plan') or 'free'
             settings = get_settings()
             limits = settings.get_plan_limits(plan)
 
