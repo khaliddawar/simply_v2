@@ -20,7 +20,8 @@ import {
   CheckCircle,
 } from 'lucide-react';
 import { useSelectedPodcast } from '@/hooks/useSelectedPodcast';
-import { useDeletePodcast, useGeneratePodcastSummary, useEmailPodcastSummary } from '@/hooks/usePodcasts';
+import { useDeletePodcast, useGeneratePodcastSummary, useEmailPodcastSummary, useSyncPodcastToPinecone } from '@/hooks/usePodcasts';
+import { Cloud } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   Dialog,
@@ -86,6 +87,7 @@ export function PodcastDetailsPanel() {
   const deletePodcast = useDeletePodcast();
   const generateSummary = useGeneratePodcastSummary();
   const emailSummary = useEmailPodcastSummary();
+  const syncToPinecone = useSyncPodcastToPinecone();
 
   const [isDeleting, setIsDeleting] = useState(false);
   const [showSummaryDialog, setShowSummaryDialog] = useState(false);
@@ -108,6 +110,7 @@ export function PodcastDetailsPanel() {
     group_name,
     created_at,
     transcript_length,
+    pinecone_file_id,
   } = selectedPodcast;
 
   const handleGenerateSummary = async (forceRegenerate = false) => {
@@ -219,6 +222,17 @@ export function PodcastDetailsPanel() {
       toast.error('Failed to delete podcast');
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  const handleSyncToPinecone = async () => {
+    try {
+      const result = await syncToPinecone.mutateAsync(id);
+      if (result.success) {
+        toast.success('Podcast synced to Pinecone! You can now use RAG chat.');
+      }
+    } catch {
+      toast.error('Failed to sync to Pinecone. Please try again.');
     }
   };
 
@@ -354,6 +368,28 @@ export function PodcastDetailsPanel() {
       <div className="p-4 flex-1">
         <h3 className="text-xs font-semibold text-foreground mb-3">Quick Actions</h3>
         <div className="space-y-2">
+          {/* Sync to Pinecone (for RAG) */}
+          <button
+            onClick={handleSyncToPinecone}
+            disabled={syncToPinecone.isPending}
+            className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg border
+                       text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed
+                       ${pinecone_file_id
+                         ? 'border-green-500/30 text-green-600 hover:bg-green-500/10'
+                         : 'border-orange-500/30 text-orange-600 hover:bg-orange-500/10'}`}
+          >
+            {syncToPinecone.isPending ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Cloud className="w-3.5 h-3.5" />
+            )}
+            {syncToPinecone.isPending
+              ? 'Syncing...'
+              : pinecone_file_id
+                ? 'Re-sync to Pinecone'
+                : 'Sync to Pinecone (for RAG chat)'}
+          </button>
+
           {/* Email Summary */}
           <button
             onClick={handleEmailSummary}

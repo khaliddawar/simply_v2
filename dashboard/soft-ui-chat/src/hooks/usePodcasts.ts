@@ -142,3 +142,33 @@ export function useEmailPodcastSummary() {
     },
   });
 }
+
+/**
+ * Response from sync-pinecone endpoint
+ */
+interface SyncPineconeResponse {
+  success: boolean;
+  message: string;
+  pinecone_file_id: string;
+  video_id_in_pinecone: string;
+}
+
+/**
+ * Hook to sync a podcast's transcript to Pinecone
+ * Use this to fix podcasts that weren't uploaded to Pinecone during creation
+ */
+export function useSyncPodcastToPinecone() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (podcastId: string): Promise<SyncPineconeResponse> => {
+      const { data } = await api.post(`/api/podcasts/${podcastId}/sync-pinecone`);
+      return data;
+    },
+    onSuccess: (_data, podcastId) => {
+      // Invalidate the specific podcast detail to refresh pinecone_file_id
+      queryClient.invalidateQueries({ queryKey: podcastKeys.detail(podcastId) });
+      queryClient.invalidateQueries({ queryKey: podcastKeys.lists() });
+    },
+  });
+}

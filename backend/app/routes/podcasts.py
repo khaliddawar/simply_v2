@@ -362,6 +362,121 @@ async def email_podcast_summary(
     return EmailSummaryResponse(**email_result)
 
 
+@router.post("/{podcast_id}/sync-pinecone")
+async def sync_podcast_to_pinecone(
+    podcast_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
+    """
+    Re-sync a podcast's transcript to Pinecone.
+
+    Use this endpoint to:
+    - Upload a podcast that wasn't uploaded to Pinecone during creation
+    - Re-upload a podcast after transcript changes
+    - Fix podcasts created before Pinecone integration
+
+    This will delete the old Pinecone file (if exists) and upload fresh.
+    """
+    from app.services.pinecone_service import get_pinecone_service
+
+    db = await get_database_service()
+    podcast_service = get_podcast_service()
+    podcast_service.set_database(db)
+    pinecone_service = get_pinecone_service()
+
+    if not pinecone_service.is_initialized():
+        raise HTTPException(
+            status_code=503,
+            detail="Pinecone service not available"
+        )
+
+    # Get podcast with transcript
+    podcast = await podcast_service.get_podcast(
+        podcast_id=podcast_id,
+        user_id=user_id,
+        include_transcript=True
+    )
+
+    if not podcast:
+        raise HTTPException(status_code=404, detail="Podcast not found")
+
+    transcript = podcast.get("transcript")
+    if not transcript:
+        raise HTTPException(
+            status_code=400,
+            detail="Podcast has no transcript to sync"
+        )
+
+    # Delete old Pinecone file if exists
+    old_file_id = podcast.get("pinecone_file_id")
+    if old_file_id:
+        try:
+            await pinecone_service.delete_file(old_file_id)
+            logger.info(f"Deleted old Pinecone file {old_file_id} for podcast {podcast_id}")
+        except Exception as e:
+            logger.warning(f"Failed to delete old Pinecone file: {e}")
+
+    # Upload to Pinecone using the same format as podcast_service
+    from datetime import datetime
+
+    podcast_date = podcast.get("podcast_date")
+    if isinstance(podcast_date, str):
+        try:
+            podcast_date = datetime.fromisoformat(podcast_date.replace("Z", "+00:00"))
+        except ValueError:
+            podcast_date = None
+
+    date_str = podcast_date.strftime("%Y-%m-%d %H:%M") if podcast_date else "Unknown date"
+    participants = podcast.get("participants") or []
+    participants_str = ", ".join(participants) if participants else "Unknown participants"
+
+    enhanced_transcript = f"""## Podcast Information
+- **Subject:** {podcast.get("subject") or podcast.get("title")}
+- **Date:** {date_str}
+- **Source:** {podcast.get("source", "manual").capitalize()}
+- **Participants:** {participants_str}
+
+## Transcript
+
+{transcript}
+"""
+
+    result = await pinecone_service.upload_transcript(
+        user_id=user_id,
+        video_id=f"podcast_{podcast_id}",  # Same format as podcast_service
+        title=podcast.get("title", "Untitled Podcast"),
+        transcript=enhanced_transcript,
+        metadata={
+            "type": "podcast",
+            "source": podcast.get("source", "manual"),
+            "podcast_id": podcast_id,
+            "subject": podcast.get("subject"),
+            "podcast_date": date_str,
+            "participants": participants_str
+        }
+    )
+
+    if not result.get("success"):
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to upload to Pinecone: {result.get('error')}"
+        )
+
+    # Update database with new Pinecone file ID
+    new_file_id = result.get("file_id")
+    if new_file_id:
+        await db.update_podcast_pinecone_id(podcast_id, new_file_id)
+
+    logger.info(f"Synced podcast {podcast_id} to Pinecone, file_id: {new_file_id}")
+
+    return {
+        "success": True,
+        "message": "Podcast synced to Pinecone successfully",
+        "pinecone_file_id": new_file_id,
+        "video_id_in_pinecone": f"podcast_{podcast_id}"
+    }
+
+
 @router.get("/stats/summary")
 async def get_podcast_stats(
     user_id: str = Depends(get_current_user_id)
