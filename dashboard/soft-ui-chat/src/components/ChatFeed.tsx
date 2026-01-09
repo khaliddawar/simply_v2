@@ -110,7 +110,7 @@ export function ChatFeed() {
   };
 
   return (
-    <div className="flex-1 h-full flex flex-col bg-background">
+    <div className="flex-1 h-full min-h-0 flex flex-col bg-background">
       {/* Header */}
       <header className="h-14 border-b border-border/50 flex items-center justify-between px-4 bg-card/50 backdrop-blur-sm shrink-0">
         <div className="flex items-center gap-3">

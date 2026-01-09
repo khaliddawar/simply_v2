@@ -300,7 +300,7 @@ export function LeftSidebar() {
   };
 
   return (
-    <aside className="w-60 h-full bg-card border-r border-border/50 flex flex-col overflow-hidden rounded-l-2xl">
+    <aside className="w-60 h-full shrink-0 bg-card border-r border-border/50 flex flex-col overflow-hidden rounded-l-2xl">
       {/* Header */}
       <div className="p-3 flex items-center gap-2">
         <div className="flex gap-1.5">

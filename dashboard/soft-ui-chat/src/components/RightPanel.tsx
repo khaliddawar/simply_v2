@@ -63,7 +63,7 @@ export function RightPanel() {
   const panelState = usePanelState();
 
   return (
-    <aside className="w-72 h-full bg-card border-l border-border/50 flex flex-col overflow-hidden rounded-r-2xl">
+    <aside className="w-72 h-full shrink-0 bg-card border-l border-border/50 flex flex-col overflow-hidden rounded-r-2xl">
       {panelState === 'citations' && <CitationsPanel />}
       {panelState === 'video' && <VideoDetailsPanel />}
       {panelState === 'podcast' && <PodcastDetailsPanel />}
