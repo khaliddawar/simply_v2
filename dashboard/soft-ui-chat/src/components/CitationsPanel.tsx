@@ -62,10 +62,18 @@ export function CitationsPanel() {
   const handleGenerateSummary = async () => {
     if (!selectedTranscript) return;
     try {
-      const result = await generateSummary.mutateAsync(selectedTranscript.id);
+      const result = await generateSummary.mutateAsync({
+        videoId: selectedTranscript.id,
+        forceRegenerate: false,
+      });
       if (result.success) {
         setSummary(result);
         setShowSummaryDialog(true);
+        if (result.cached) {
+          toast.success('Loaded cached summary');
+        } else {
+          toast.success('Summary generated successfully');
+        }
       } else {
         toast.error(result.error || 'Failed to generate summary');
       }
