@@ -81,6 +81,40 @@ Critical requirements:
 - Do NOT add information that is not present in the section content
 - Output ONLY valid JSON"""
 
+CHAIN_OF_DENSITY_PROMPT_WITH_CONTEXT = """You are an expert summarizer. Generate a comprehensive summary of the following section using Chain of Density technique.
+
+SECTION TITLE: {section_title}
+SECTION CONTENT:
+{section_content}
+
+{previous_context}
+
+Your task:
+1. First, write an initial summary (5-7 sentences) covering the main points thoroughly
+2. Then, identify 3-4 key entities/facts that are missing from your summary
+3. Rewrite the summary to include these entities while maintaining clarity
+4. Repeat step 2-3 one more time (total 3 iterations)
+
+CRITICAL: Focus on information that is NEW and UNIQUE to this section.
+If something was already covered in previous sections, do NOT repeat it in detail.
+You may briefly reference it (e.g., "Building on the earlier discussion of X...") but focus your summary on NEW content.
+
+After 3 iterations, provide your final dense summary.
+
+Respond in JSON format:
+{{
+    "summary": "Your final dense summary (5-7 sentences, focusing on NEW information)",
+    "key_points": ["Key point 1", "Key point 2", "Key point 3", "Key point 4", "Key point 5"],
+    "entities": ["Important entity 1", "Important entity 2", "Important entity 3"]
+}}
+
+Critical requirements:
+- Prioritize NEW information unique to this section
+- Do NOT repeat facts/examples already covered in previous sections
+- Include 4-6 key points that are actionable or memorable takeaways
+- Entities are important names, terms, numbers, or concepts EXPLICITLY mentioned
+- Output ONLY valid JSON"""
+
 EXECUTIVE_SUMMARY_PROMPT = """Based on these section summaries, create a comprehensive executive summary of the entire video.
 
 VIDEO TITLE: {video_title}
@@ -88,25 +122,82 @@ VIDEO TITLE: {video_title}
 SECTION SUMMARIES:
 {section_summaries}
 
+CRITICAL INSTRUCTIONS FOR HANDLING REPETITION:
+1. If the same point, example, or anecdote appears across multiple sections, mention it ONLY ONCE
+2. Consolidate repeated themes into single, comprehensive statements
+3. Prioritize UNIQUE insights over frequently repeated points
+4. The source video may intentionally repeat key messages - your job is to SYNTHESIZE, not echo
+5. Each key takeaway must be DISTINCT - no near-duplicates allowed
+
 Create:
-1. A thorough executive summary (4-6 sentences capturing the main narrative, key arguments, and conclusions)
-2. 5-8 key takeaways from the entire video (actionable insights and important learnings)
+1. A thorough executive summary (4-6 sentences) that CONSOLIDATES repeated themes into single mentions
+2. 5-8 UNIQUE key takeaways - each must provide NEW information not covered by other takeaways
 3. Who would benefit from this video (target audience with specific characteristics)
 
 Respond in JSON format:
 {{
-    "executive_summary": "4-6 sentence comprehensive overview covering the main narrative, arguments, and conclusions",
-    "key_takeaways": ["Takeaway 1", "Takeaway 2", "Takeaway 3", "Takeaway 4", "Takeaway 5"],
-    "target_audience": "Detailed description of who should watch this and why they would benefit"
+    "executive_summary": "4-6 sentence comprehensive overview - mention repeated themes ONCE only",
+    "key_takeaways": ["Unique takeaway 1", "Unique takeaway 2", ...],
+    "target_audience": "Detailed description of who should watch this and why"
 }}
 
 Critical requirements:
 - The executive summary should synthesize information from ALL sections coherently
-- Key takeaways must be specific, actionable, and directly derived from the content
-- ONLY include information that appears in the section summaries - no external knowledge or speculation
-- If the video mentions specific methods, frameworks, or recommendations, include them
-- Do NOT generalize beyond what is explicitly stated in the summaries
+- Key takeaways must be specific, actionable, and MUTUALLY EXCLUSIVE (no overlapping points)
+- ONLY include information that appears in the section summaries - no external knowledge
+- If a topic (e.g., "risk management") appears in 5 sections, summarize it ONCE comprehensively
 - Output ONLY valid JSON"""
+
+CONSOLIDATION_PROMPT = """Review this video summary and remove ALL redundant/repeated content.
+
+CURRENT SUMMARY:
+{summary_json}
+
+YOUR TASKS:
+1. IDENTIFY repeated information across sections (same events, facts, examples mentioned multiple times)
+2. For each repeated item, KEEP the most detailed version in ONE section only
+3. In other sections, either REMOVE the repeated content or replace with a brief reference like "As mentioned earlier..."
+4. MERGE duplicate key_takeaways into single comprehensive points
+5. Ensure the executive_summary mentions each major theme exactly ONCE
+
+RULES:
+- Each specific fact/event/example should appear in detail in ONE section only
+- Key takeaways must be mutually exclusive - no two should cover the same ground
+- Preserve all UNIQUE information - only remove/merge DUPLICATES
+- Maintain the same JSON structure
+
+Return the DEDUPLICATED summary in the exact same JSON structure.
+Output ONLY valid JSON."""
+
+MMR_DEDUP_PROMPT = """You are a deduplication expert. Given a list of key points from a video summary,
+identify and merge semantically similar points while preserving unique insights.
+
+KEY POINTS TO DEDUPLICATE:
+{key_points_json}
+
+YOUR TASK:
+1. Group points that convey the same or very similar information
+2. For each group, create ONE comprehensive point that captures all the nuances
+3. Keep points that are genuinely unique and distinct
+4. Aim for 5-8 final points maximum
+
+SCORING CRITERIA (MMR-inspired):
+- Relevance: How important/actionable is the point?
+- Novelty: How different is it from other selected points?
+- Select points that maximize: relevance + novelty
+
+Return JSON:
+{{
+    "deduplicated_points": [
+        "Comprehensive unique point 1",
+        "Comprehensive unique point 2"
+    ],
+    "merge_log": [
+        {{"merged": ["original point A", "original point B"], "into": "merged point"}}
+    ]
+}}
+
+Output ONLY valid JSON."""
 
 
 class SummarizationService:
@@ -220,16 +311,49 @@ class SummarizationService:
 
         return result
 
-    async def summarize_section(self, section_title: str, section_content: str) -> Dict[str, Any]:
-        """Apply Chain of Density summarization to a section"""
+    async def summarize_section(
+        self,
+        section_title: str,
+        section_content: str,
+        previous_summaries: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
+        """
+        Apply Chain of Density summarization to a section.
+
+        Args:
+            section_title: Title of the section
+            section_content: Content to summarize
+            previous_summaries: List of summaries from previous sections (for context)
+        """
         # Truncate section if too long (increased from 4000 to 8000 for richer summaries)
         # This allows more context per section while staying within model limits
         truncated = section_content[:8000] if len(section_content) > 8000 else section_content
 
-        prompt = CHAIN_OF_DENSITY_PROMPT.format(
-            section_title=section_title,
-            section_content=truncated
-        )
+        # Build context from previous sections
+        previous_context = ""
+        if previous_summaries:
+            context_parts = ["PREVIOUSLY COVERED (do NOT repeat these in detail):"]
+            for ps in previous_summaries:
+                title = ps.get('title', 'Previous Section')
+                key_points = ps.get('key_points', [])
+                if key_points:
+                    points_str = "; ".join(key_points[:3])  # Top 3 points
+                    context_parts.append(f"- {title}: {points_str}")
+            previous_context = "\n".join(context_parts)
+
+        # Use context-aware prompt if we have previous sections
+        if previous_summaries:
+            prompt = CHAIN_OF_DENSITY_PROMPT_WITH_CONTEXT.format(
+                section_title=section_title,
+                section_content=truncated,
+                previous_context=previous_context
+            )
+        else:
+            # First section - use original prompt
+            prompt = CHAIN_OF_DENSITY_PROMPT.format(
+                section_title=section_title,
+                section_content=truncated
+            )
 
         result = await self._call_llm(prompt, temperature=0.3)
 
@@ -268,6 +392,108 @@ class SummarizationService:
             }
 
         return result
+
+    async def consolidate_summary(self, raw_summary: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Post-process the summary to remove cross-section redundancy.
+
+        This is the final step that catches any repetition that slipped through
+        the section-level summarization.
+        """
+        if not self.is_available():
+            return raw_summary
+
+        try:
+            # Prepare summary for consolidation (exclude metadata)
+            summary_for_consolidation = {
+                "executive_summary": raw_summary.get("executive_summary", ""),
+                "key_takeaways": raw_summary.get("key_takeaways", []),
+                "target_audience": raw_summary.get("target_audience", ""),
+                "sections": raw_summary.get("sections", [])
+            }
+
+            prompt = CONSOLIDATION_PROMPT.format(
+                summary_json=json.dumps(summary_for_consolidation, indent=2)
+            )
+
+            result = await self._call_llm(prompt, temperature=0.2)
+
+            if "error" in result:
+                logger.warning(f"Consolidation failed, returning original: {result['error']}")
+                return raw_summary
+
+            # Merge consolidated content back with original metadata
+            consolidated = {
+                **raw_summary,
+                "executive_summary": result.get("executive_summary", raw_summary.get("executive_summary", "")),
+                "key_takeaways": result.get("key_takeaways", raw_summary.get("key_takeaways", [])),
+                "target_audience": result.get("target_audience", raw_summary.get("target_audience", "")),
+                "sections": result.get("sections", raw_summary.get("sections", [])),
+                "metadata": {
+                    **raw_summary.get("metadata", {}),
+                    "consolidated": True
+                }
+            }
+
+            logger.info("Summary consolidated successfully")
+            return consolidated
+
+        except Exception as e:
+            logger.error(f"Error consolidating summary: {e}")
+            return raw_summary
+
+    async def deduplicate_key_points(
+        self,
+        all_points: List[str],
+        max_points: int = 8
+    ) -> List[str]:
+        """
+        Apply MMR-inspired deduplication to key points.
+
+        Uses LLM to identify semantically similar points and merge them,
+        while preserving unique insights.
+
+        Args:
+            all_points: List of all key points from all sections
+            max_points: Maximum number of points to return
+
+        Returns:
+            Deduplicated list of key points
+        """
+        if not all_points:
+            return []
+
+        # If already under limit and few points, skip dedup
+        if len(all_points) <= max_points:
+            return all_points
+
+        if not self.is_available():
+            # Fallback: simple truncation
+            return all_points[:max_points]
+
+        try:
+            prompt = MMR_DEDUP_PROMPT.format(
+                key_points_json=json.dumps(all_points, indent=2)
+            )
+
+            result = await self._call_llm(prompt, temperature=0.2)
+
+            if "error" in result:
+                logger.warning(f"Deduplication failed: {result['error']}")
+                return all_points[:max_points]
+
+            deduplicated = result.get("deduplicated_points", all_points)
+
+            # Log merge operations for debugging
+            merge_log = result.get("merge_log", [])
+            if merge_log:
+                logger.info(f"Merged {len(merge_log)} groups of similar key points")
+
+            return deduplicated[:max_points]
+
+        except Exception as e:
+            logger.error(f"Error deduplicating key points: {e}")
+            return all_points[:max_points]
 
     async def generate_summary(
         self,
@@ -332,10 +558,11 @@ class SummarizationService:
                     end = (i + 1) * chunk_size
                     section_content = transcript[start:end]
 
-                # Apply Chain of Density summarization
+                # Apply Chain of Density with context from previous sections
                 section_summary = await self.summarize_section(
                     section.get("title", f"Section {i+1}"),
-                    section_content
+                    section_content,
+                    previous_summaries=section_summaries if i > 0 else None
                 )
 
                 section_summaries.append({
@@ -356,6 +583,12 @@ class SummarizationService:
             for s in section_summaries:
                 all_key_points.extend(s.get("key_points", []))
 
+            # Apply MMR-based deduplication to key points
+            if len(all_key_points) > 8:
+                logger.info(f"Deduplicating {len(all_key_points)} key points...")
+                all_key_points = await self.deduplicate_key_points(all_key_points)
+                logger.info(f"Reduced to {len(all_key_points)} unique points")
+
             # Compile final result
             result = {
                 "success": True,
@@ -372,6 +605,10 @@ class SummarizationService:
                     "transcript_length": len(transcript)
                 }
             }
+
+            # Apply post-processing consolidation to remove cross-section redundancy
+            logger.info("Step 4: Consolidating summary to remove redundancy...")
+            result = await self.consolidate_summary(result)
 
             logger.info(f"Summary generated successfully for: {video_title}")
             return result
