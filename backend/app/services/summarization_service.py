@@ -241,14 +241,27 @@ class SummarizationService:
         """Check if summarization service is available"""
         return self.client is not None
 
-    async def _call_llm(self, prompt: str, temperature: float = 0.3) -> Dict[str, Any]:
-        """Make an LLM call and parse JSON response"""
+    async def _call_llm(
+        self,
+        prompt: str,
+        temperature: float = 0.3,
+        model_override: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Make an LLM call and parse JSON response
+
+        Args:
+            prompt: The prompt to send
+            temperature: Sampling temperature
+            model_override: Optional model to use instead of default (e.g., 'gpt-4o' for complex tasks)
+        """
         if not self.client:
             return {"error": "LLM not configured"}
 
+        model = model_override or self.settings.llm_model
+
         try:
             response = await self.client.chat.completions.create(
-                model=self.settings.llm_model,
+                model=model,
                 messages=[
                     {"role": "system", "content": "You are a helpful assistant that outputs only valid JSON."},
                     {"role": "user", "content": prompt}
@@ -431,6 +444,8 @@ class SummarizationService:
 
         This is the final step that catches any repetition that slipped through
         the section-level summarization.
+
+        Uses gpt-4o for better instruction following on this complex task.
         """
         if not self.is_available():
             return raw_summary
@@ -448,7 +463,9 @@ class SummarizationService:
                 summary_json=json.dumps(summary_for_consolidation, indent=2)
             )
 
-            result = await self._call_llm(prompt, temperature=0.2)
+            # Use gpt-4o for consolidation - it follows complex delta instructions better
+            logger.info("Using gpt-4o for consolidation step...")
+            result = await self._call_llm(prompt, temperature=0.2, model_override="gpt-4o")
 
             if "error" in result:
                 logger.warning(f"Consolidation failed, returning original: {result['error']}")
@@ -463,11 +480,12 @@ class SummarizationService:
                 "sections": result.get("sections", raw_summary.get("sections", [])),
                 "metadata": {
                     **raw_summary.get("metadata", {}),
-                    "consolidated": True
+                    "consolidated": True,
+                    "consolidation_model": "gpt-4o"
                 }
             }
 
-            logger.info("Summary consolidated successfully")
+            logger.info("Summary consolidated successfully with gpt-4o")
             return consolidated
 
         except Exception as e:
