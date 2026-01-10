@@ -81,7 +81,7 @@ Critical requirements:
 - Do NOT add information that is not present in the section content
 - Output ONLY valid JSON"""
 
-CHAIN_OF_DENSITY_PROMPT_WITH_CONTEXT = """You are an expert summarizer. Generate a comprehensive summary of the following section using Chain of Density technique.
+CHAIN_OF_DENSITY_PROMPT_WITH_CONTEXT = """You are an expert summarizer using the Delta Extraction approach.
 
 SECTION TITLE: {section_title}
 SECTION CONTENT:
@@ -89,30 +89,34 @@ SECTION CONTENT:
 
 {previous_context}
 
+DELTA EXTRACTION APPROACH:
+For topics/events already covered in previous sections, extract ONLY NEW DETAILS - not the base facts.
+
+Example of what we want:
+- Previous section mentioned: "Speaker lost $700K shorting Tilray in 2018"
+- This section mentions it again but adds: "recovered the loss within a month"
+- CORRECT: Include "recovered within a month" (NEW detail)
+- WRONG: Repeat "lost $700K shorting Tilray" (BASE FACT already covered)
+
 Your task:
-1. First, write an initial summary (5-7 sentences) covering the main points thoroughly
-2. Then, identify 3-4 key entities/facts that are missing from your summary
-3. Rewrite the summary to include these entities while maintaining clarity
-4. Repeat step 2-3 one more time (total 3 iterations)
-
-CRITICAL: Focus on information that is NEW and UNIQUE to this section.
-If something was already covered in previous sections, do NOT repeat it in detail.
-You may briefly reference it (e.g., "Building on the earlier discussion of X...") but focus your summary on NEW content.
-
-After 3 iterations, provide your final dense summary.
+1. Identify what topics from this section were already covered previously
+2. For those topics, extract ONLY the new details, developments, or perspectives
+3. For genuinely new topics, provide full context
+4. Apply Chain of Density: iterate 2-3 times to increase information density
 
 Respond in JSON format:
 {{
-    "summary": "Your final dense summary (5-7 sentences, focusing on NEW information)",
-    "key_points": ["Key point 1", "Key point 2", "Key point 3", "Key point 4", "Key point 5"],
-    "entities": ["Important entity 1", "Important entity 2", "Important entity 3"]
+    "summary": "5-7 sentences focusing on NEW details. For previously covered topics, mention only what's NEW (e.g., 'The speaker later recovered the Tilray loss within a month' NOT 'The speaker lost $700K on Tilray')",
+    "key_points": ["Each point should be genuinely new information or a new perspective"],
+    "entities": ["Important entities from THIS section"],
+    "delta_notes": ["Brief note on what new info was added about previously covered topics"]
 }}
 
 Critical requirements:
-- Prioritize NEW information unique to this section
-- Do NOT repeat facts/examples already covered in previous sections
-- Include 4-6 key points that are actionable or memorable takeaways
-- Entities are important names, terms, numbers, or concepts EXPLICITLY mentioned
+- For recurring topics: extract the DELTA (new details), not the base facts
+- Base facts belong in their FIRST mention only
+- Later sections add context, outcomes, lessons, or new perspectives
+- If this section adds nothing new about a topic, don't mention that topic
 - Output ONLY valid JSON"""
 
 EXECUTIVE_SUMMARY_PROMPT = """Based on these section summaries, create a comprehensive executive summary of the entire video.
@@ -148,25 +152,44 @@ Critical requirements:
 - If a topic (e.g., "risk management") appears in 5 sections, summarize it ONCE comprehensively
 - Output ONLY valid JSON"""
 
-CONSOLIDATION_PROMPT = """Review this video summary and remove ALL redundant/repeated content.
+CONSOLIDATION_PROMPT = """Apply Delta Consolidation to this video summary.
 
 CURRENT SUMMARY:
 {summary_json}
 
+DELTA CONSOLIDATION APPROACH:
+The goal is NOT to remove all repetition, but to ensure each section contributes UNIQUE VALUE.
+
+For recurring topics (e.g., a major event mentioned in multiple sections):
+- FIRST MENTION: Keep full base facts (who, what, when, where, how much)
+- LATER MENTIONS: Keep ONLY new details (outcomes, lessons, perspectives, developments)
+
+Example - Topic "Tilray loss" appearing in 5 sections:
+- Section 1: "Lost $700K shorting Tilray in 2018" ✓ (base facts - KEEP)
+- Section 3: "Lost $700K shorting Tilray in 2018" ✗ → "Recovered the loss within a month" ✓ (delta)
+- Section 5: "Lost $700K shorting Tilray in 2018" ✗ → "Considers it his biggest trading mistake" ✓ (delta)
+- Section 7: "Lost $700K shorting Tilray in 2018" ✗ → "The psychological toll affected later trades" ✓ (delta)
+
 YOUR TASKS:
-1. IDENTIFY repeated information across sections (same events, facts, examples mentioned multiple times)
-2. For each repeated item, KEEP the most detailed version in ONE section only
-3. In other sections, either REMOVE the repeated content or replace with a brief reference like "As mentioned earlier..."
-4. MERGE duplicate key_takeaways into single comprehensive points
-5. Ensure the executive_summary mentions each major theme exactly ONCE
+1. IDENTIFY base facts that appear multiple times (same event/example/statistic)
+2. KEEP base facts in their FIRST detailed mention
+3. In later sections, REPLACE base facts with the NEW details from that section
+4. If a section adds NO new details about a topic, remove that topic from that section
+5. PRESERVE genuinely new information - don't over-consolidate
 
-RULES:
-- Each specific fact/event/example should appear in detail in ONE section only
-- Key takeaways must be mutually exclusive - no two should cover the same ground
-- Preserve all UNIQUE information - only remove/merge DUPLICATES
-- Maintain the same JSON structure
+PRESERVE THESE (they add value):
+- New outcomes or results
+- New perspectives or reflections
+- New lessons learned
+- Timeline progression (what happened next)
+- Emotional/psychological aspects mentioned later
 
-Return the DEDUPLICATED summary in the exact same JSON structure.
+REMOVE THESE (pure repetition):
+- Same statistic repeated verbatim
+- Same event described the same way
+- Same example with no new context
+
+Return the consolidated summary in the exact same JSON structure.
 Output ONLY valid JSON."""
 
 MMR_DEDUP_PROMPT = """You are a deduplication expert. Given a list of key points from a video summary,
@@ -329,16 +352,25 @@ class SummarizationService:
         # This allows more context per section while staying within model limits
         truncated = section_content[:8000] if len(section_content) > 8000 else section_content
 
-        # Build context from previous sections
+        # Build context from previous sections with base facts tracking
         previous_context = ""
         if previous_summaries:
-            context_parts = ["PREVIOUSLY COVERED (do NOT repeat these in detail):"]
+            context_parts = ["BASE FACTS ALREADY COVERED (extract only NEW details about these):"]
+            all_entities = set()
             for ps in previous_summaries:
                 title = ps.get('title', 'Previous Section')
                 key_points = ps.get('key_points', [])
+                entities = ps.get('entities', [])
+                all_entities.update(entities)
                 if key_points:
                     points_str = "; ".join(key_points[:3])  # Top 3 points
                     context_parts.append(f"- {title}: {points_str}")
+
+            # Add entities as explicit base facts
+            if all_entities:
+                context_parts.append(f"\nKEY ENTITIES ALREADY INTRODUCED: {', '.join(list(all_entities)[:10])}")
+                context_parts.append("If these appear again, only include NEW information about them.")
+
             previous_context = "\n".join(context_parts)
 
         # Use context-aware prompt if we have previous sections
