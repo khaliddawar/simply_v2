@@ -139,14 +139,14 @@ export function LeftSidebar() {
   const podcasts = podcastsData?.podcasts ?? [];
 
   // Auto-select the first (most recent) transcript when data loads
-  // Only auto-select if no transcript is currently selected
+  // Only auto-select if no transcript AND no podcast is currently selected
   useEffect(() => {
-    if (!transcriptsLoading && videos.length > 0 && !selectedTranscript) {
+    if (!transcriptsLoading && videos.length > 0 && !selectedTranscript && !selectedPodcast) {
       // Videos are sorted by most recent first from API
       setSelectedTranscript(videos[0]);
       setVideoFilter(videos[0].id);  // Also set video context for RAG chat
     }
-  }, [transcriptsLoading, videos, selectedTranscript, setSelectedTranscript, setVideoFilter]);
+  }, [transcriptsLoading, videos, selectedTranscript, selectedPodcast, setSelectedTranscript, setVideoFilter]);
 
   // Handle transcript selection
   const handleSelectTranscript = (video: Video) => {
