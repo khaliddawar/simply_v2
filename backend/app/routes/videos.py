@@ -104,6 +104,40 @@ async def debug_auth(user_id: str = Depends(get_current_user_id_optional)):
     }
 
 
+@router.get("/check/{youtube_id}")
+async def check_video_saved(
+    youtube_id: str,
+    user_id: str = Depends(get_current_user_id_optional)
+):
+    """
+    Check if a video is already saved in the user's library by YouTube video ID.
+
+    Returns:
+    - is_saved: boolean indicating if video exists
+    - video: basic video info if saved (id, title, created_at)
+    """
+    db = await get_database_service()
+
+    video = await db.get_video_by_youtube_id(user_id=user_id, youtube_id=youtube_id)
+
+    if video:
+        return {
+            "is_saved": True,
+            "video": {
+                "id": video.get("id"),
+                "title": video.get("title"),
+                "channel_name": video.get("channel_name"),
+                "created_at": video.get("created_at"),
+                "youtube_id": video.get("youtube_id")
+            }
+        }
+
+    return {
+        "is_saved": False,
+        "video": None
+    }
+
+
 @router.get("/{video_id}", response_model=VideoWithTranscript)
 async def get_video(
     video_id: str,
@@ -215,10 +249,10 @@ async def get_video_summary(
             return VideoSummaryResponse(**summary_data)
 
     # Check if summarization service is available for fresh generation
-    if not summarization_service.is_available():
+    if not summarization_service.is_available() and not summarization_service.is_openrouter_available():
         raise HTTPException(
             status_code=503,
-            detail="Summarization service not available - OpenAI API key not configured"
+            detail="Summarization service not available - no LLM API keys configured"
         )
 
     # Get video with transcript
