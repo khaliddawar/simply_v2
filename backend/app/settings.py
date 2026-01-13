@@ -94,6 +94,11 @@ class Settings(BaseSettings):
     llm_model: str = "gpt-4o-mini"  # Cost-effective model for summarization
     llm_max_tokens: int = 4000
 
+    # OpenRouter Settings (for large context models)
+    openrouter_api_key: Optional[str] = None
+    openrouter_default_model: str = "google/gemini-2.0-flash-001"  # 1M context window
+    openrouter_large_context_threshold: int = 50000  # Use OpenRouter for transcripts > 50K chars
+
     # Development
     use_mock_pinecone: bool = False
     use_mock_paddle: bool = False
