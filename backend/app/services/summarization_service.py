@@ -1296,12 +1296,15 @@ class SummarizationService:
                 )
 
             # Format sections with proper structure
+            # Note: SectionSummary model requires both 'description' and 'summary' fields
             sections = []
             for section in result.get("sections", []):
+                summary_text = section.get("summary", "")
                 sections.append({
                     "title": section.get("title", "Section"),
                     "timestamp": section.get("timestamp", "0:00 - 0:00"),
-                    "summary": section.get("summary", ""),
+                    "description": summary_text,  # Required by SectionSummary model
+                    "summary": summary_text,
                     "key_points": section.get("key_points", []),
                     "entities": section.get("entities", [])
                 })
