@@ -243,6 +243,15 @@ async def get_video_summary(
         if cached and cached.get("summary_data"):
             logger.info(f"Returning cached summary for video {video_id}")
             summary_data = cached["summary_data"]
+
+            # Migrate old cached summaries: ensure sections have 'description' field
+            # (older summaries may only have 'summary' field)
+            if "sections" in summary_data:
+                for section in summary_data["sections"]:
+                    if "description" not in section:
+                        # Copy summary to description for backward compatibility
+                        section["description"] = section.get("summary", "")
+
             # Add cache metadata to response
             summary_data["cached"] = True
             summary_data["cached_at"] = cached.get("summary_generated_at").isoformat() if cached.get("summary_generated_at") else None
