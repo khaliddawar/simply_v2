@@ -302,6 +302,7 @@ class AuthService:
 
             # Check if user exists by Google ID
             user = await self.db.get_user_by_google_id(google_id)
+            is_new_user = False
 
             if not user:
                 # Check by email (might have registered with password first)
@@ -312,12 +313,25 @@ class AuthService:
                     await self.db.update_user(user["id"], {"google_id": google_id})
                 else:
                     # Create new user
+                    is_new_user = True
                     user = await self.db.create_user(
                         email=email,
                         google_id=google_id,
                         first_name=first_name,
                         last_name=last_name
                     )
+
+            # Send welcome email for new users
+            if is_new_user:
+                try:
+                    from app.services.email_service import get_email_service
+                    email_service = get_email_service()
+                    await email_service.send_welcome_email(
+                        recipient_email=email,
+                        first_name=first_name
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to send welcome email: {e}")
 
             # Create our JWT token
             jwt_token = self.create_access_token(user["id"])
