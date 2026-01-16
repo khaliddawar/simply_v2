@@ -189,6 +189,117 @@ class EmailService:
                 "error": str(e)
             }
 
+    async def send_welcome_email(
+        self,
+        recipient_email: str,
+        first_name: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Send a welcome email to new users who signed up via Google OAuth.
+
+        Args:
+            recipient_email: Email address to send to
+            first_name: User's first name for personalization
+
+        Returns:
+            Dict with success status and details
+        """
+        if not self.is_available():
+            logger.warning("Email service not available - skipping welcome email")
+            return {
+                "success": False,
+                "error": "Email service not configured"
+            }
+
+        try:
+            # Personalize greeting
+            greeting = f"Hi {first_name}," if first_name else "Welcome!"
+
+            html_content = self._generate_welcome_html(greeting, first_name)
+
+            email_data = {
+                "From": f"{self.sender_name} <{self.sender_email}>",
+                "To": recipient_email,
+                "Subject": "Welcome to TubeVibe! 🎉",
+                "HtmlBody": html_content
+            }
+
+            # Send email in thread pool to not block
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, self._send_email, email_data)
+
+            if result:
+                logger.info(f"Welcome email sent to {recipient_email}")
+                return {
+                    "success": True,
+                    "message": f"Welcome email sent to {recipient_email}",
+                    "recipient": recipient_email
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": "Failed to send welcome email via Postmark"
+                }
+
+        except Exception as e:
+            logger.error(f"Error sending welcome email: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    def _generate_welcome_html(self, greeting: str, first_name: Optional[str] = None) -> str:
+        """Generate HTML welcome email content"""
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Welcome to TubeVibe</title>
+        </head>
+        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f5f5f5;">
+            <!-- Header -->
+            <div style="background: linear-gradient(135deg, #00C2B8 0%, #00a89f 100%); color: white; padding: 32px; border-radius: 12px 12px 0 0; text-align: center;">
+                <h1 style="margin: 0; font-size: 28px; font-weight: 700;">Welcome to TubeVibe!</h1>
+                <p style="margin: 8px 0 0 0; opacity: 0.9; font-size: 16px;">Your personal YouTube knowledge library</p>
+            </div>
+
+            <!-- Content -->
+            <div style="background: white; padding: 32px; border-radius: 0 0 12px 12px;">
+                <p style="font-size: 18px; margin-top: 0;">{greeting}</p>
+
+                <p>Thanks for joining TubeVibe! You're all set to start building your personal video knowledge library.</p>
+
+                <h3 style="color: #00C2B8; margin-top: 24px;">What you can do:</h3>
+                <ul style="padding-left: 20px;">
+                    <li style="margin-bottom: 8px;"><strong>Save transcripts</strong> - Capture any YouTube video's transcript with one click</li>
+                    <li style="margin-bottom: 8px;"><strong>AI summaries</strong> - Get instant summaries of long videos</li>
+                    <li style="margin-bottom: 8px;"><strong>Smart search</strong> - Find information across all your saved videos</li>
+                    <li style="margin-bottom: 8px;"><strong>Organize</strong> - Group videos by topic or project</li>
+                </ul>
+
+                <div style="text-align: center; margin: 32px 0;">
+                    <a href="https://www.youtube.com"
+                       style="display: inline-block; background: linear-gradient(135deg, #00C2B8 0%, #00a89f 100%); color: white; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 16px;">
+                        Start Exploring YouTube
+                    </a>
+                </div>
+
+                <p style="color: #666; font-size: 14px;">
+                    Just install our Chrome extension, navigate to any YouTube video, and click the TubeVibe icon to get started!
+                </p>
+
+                <!-- Footer -->
+                <div style="text-align: center; color: #999; font-size: 12px; margin-top: 32px; padding-top: 16px; border-top: 1px solid #eee;">
+                    <p>Happy learning!</p>
+                    <p>The TubeVibe Team</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+
     def _generate_summary_html(
         self,
         video_title: str,

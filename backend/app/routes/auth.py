@@ -468,12 +468,16 @@ async def google_oauth_extension(request: GoogleUserDataRequest):
     This bypasses the code exchange flow since extensions can't
     securely store client secrets.
     """
+    from app.services.email_service import get_email_service
+
     auth_service = get_auth_service()
 
     if not auth_service.db:
         raise HTTPException(status_code=500, detail="Database service not available")
 
     try:
+        is_new_user = False
+
         # Check if user exists by Google ID
         user = await auth_service.db.get_user_by_google_id(request.google_id)
 
@@ -486,6 +490,7 @@ async def google_oauth_extension(request: GoogleUserDataRequest):
                 await auth_service.db.update_user(user["id"], {"google_id": request.google_id})
             else:
                 # Create new user
+                is_new_user = True
                 user = await auth_service.db.create_user(
                     email=request.email,
                     google_id=request.google_id,
@@ -495,6 +500,19 @@ async def google_oauth_extension(request: GoogleUserDataRequest):
 
         if not user:
             raise HTTPException(status_code=500, detail="Failed to create or retrieve user")
+
+        # Send welcome email for new users (don't block the response)
+        if is_new_user:
+            try:
+                email_service = get_email_service()
+                await email_service.send_welcome_email(
+                    recipient_email=request.email,
+                    first_name=request.given_name
+                )
+            except Exception as e:
+                # Log but don't fail the auth if email fails
+                import logging
+                logging.getLogger(__name__).warning(f"Failed to send welcome email: {e}")
 
         # Generate JWT token
         jwt_token = auth_service.create_access_token(user["id"])
