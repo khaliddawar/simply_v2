@@ -498,11 +498,12 @@ async def google_oauth_extension(request: GoogleUserDataRequest):
 
         # Generate JWT token
         jwt_token = auth_service.create_access_token(user["id"])
+        settings = get_settings()
 
         return TokenResponse(
             access_token=jwt_token,
             token_type="bearer",
-            expires_in=auth_service.settings.jwt_access_token_expire_minutes * 60,
+            expires_in=settings.jwt_access_token_expire_minutes * 60,
             user=UserResponse(
                 id=user["id"],
                 email=user["email"],
