@@ -475,6 +475,9 @@ async def google_oauth_extension(request: GoogleUserDataRequest):
     if not auth_service.db:
         raise HTTPException(status_code=500, detail="Database service not available")
 
+    # Normalize email to lowercase for consistent matching
+    email = request.email.lower().strip()
+
     try:
         is_new_user = False
 
@@ -482,8 +485,8 @@ async def google_oauth_extension(request: GoogleUserDataRequest):
         user = await auth_service.db.get_user_by_google_id(request.google_id)
 
         if not user:
-            # Check by email
-            user = await auth_service.db.get_user_by_email(request.email)
+            # Check by email (using normalized lowercase email)
+            user = await auth_service.db.get_user_by_email(email)
 
             if user:
                 # Link Google account to existing user
@@ -492,7 +495,7 @@ async def google_oauth_extension(request: GoogleUserDataRequest):
                 # Create new user
                 is_new_user = True
                 user = await auth_service.db.create_user(
-                    email=request.email,
+                    email=email,  # Use normalized email
                     google_id=request.google_id,
                     first_name=request.given_name or "",
                     last_name=request.family_name or ""
@@ -506,7 +509,7 @@ async def google_oauth_extension(request: GoogleUserDataRequest):
             try:
                 email_service = get_email_service()
                 await email_service.send_welcome_email(
-                    recipient_email=request.email,
+                    recipient_email=email,  # Use normalized email
                     first_name=request.given_name
                 )
             except Exception as e:
@@ -1159,3 +1162,176 @@ async def fix_pinecone_metadata(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fix Pinecone metadata: {str(e)}")
+
+
+class MergeUsersRequest(BaseModel):
+    """Request body for merging duplicate users"""
+    email: str
+    admin_secret: str
+
+
+@router.post("/admin/check-duplicate-users")
+async def check_duplicate_users(request: MergeUsersRequest):
+    """
+    Check if there are duplicate users with the same email (different user IDs).
+    This can happen if Google OAuth created a new user instead of linking to existing.
+
+    Returns info about all users with the given email (case-insensitive).
+    """
+    import os
+    from sqlalchemy import select
+
+    expected_secret = os.getenv("ADMIN_SECRET", "tubevibe-admin-2024")
+    if request.admin_secret != expected_secret:
+        raise HTTPException(status_code=403, detail="Invalid admin secret")
+
+    auth_service = get_auth_service()
+
+    if not auth_service.db:
+        raise HTTPException(status_code=500, detail="Database not available")
+
+    try:
+        email_lower = request.email.lower().strip()
+
+        # Find all users with this email (case-insensitive)
+        async with auth_service.db.get_session() as session:
+            from sqlalchemy import func
+            from app.services.database_service import UserModel, VideoModel
+
+            result = await session.execute(
+                select(UserModel).where(func.lower(UserModel.email) == email_lower)
+            )
+            users = result.scalars().all()
+
+            if not users:
+                return {
+                    "success": True,
+                    "message": f"No users found with email: {request.email}",
+                    "users": []
+                }
+
+            users_data = []
+            for user in users:
+                # Count videos for this user
+                video_count = await session.execute(
+                    select(func.count()).select_from(VideoModel).where(VideoModel.user_id == user.id)
+                )
+                count = video_count.scalar() or 0
+
+                users_data.append({
+                    "id": str(user.id),
+                    "email": user.email,
+                    "google_id": user.google_id,
+                    "authorizer_user_id": user.authorizer_user_id,
+                    "auth_provider": user.auth_provider,
+                    "first_name": user.first_name,
+                    "last_name": user.last_name,
+                    "created_at": user.created_at.isoformat() if user.created_at else None,
+                    "video_count": count
+                })
+
+            return {
+                "success": True,
+                "message": f"Found {len(users)} user(s) with email: {request.email}",
+                "duplicate_detected": len(users) > 1,
+                "users": users_data
+            }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to check users: {str(e)}")
+
+
+class MergeUsersActionRequest(BaseModel):
+    """Request body for merging duplicate users"""
+    keep_user_id: str  # The user ID to keep (primary user)
+    delete_user_id: str  # The user ID to delete (merge from)
+    admin_secret: str
+
+
+@router.post("/admin/merge-duplicate-users")
+async def merge_duplicate_users(request: MergeUsersActionRequest):
+    """
+    Merge two duplicate users by:
+    1. Moving all videos from delete_user to keep_user
+    2. Copying google_id from delete_user to keep_user (if keep_user doesn't have one)
+    3. Deleting the duplicate user
+
+    Use /admin/check-duplicate-users first to identify duplicates.
+    """
+    import os
+    from sqlalchemy import select, update as sql_update
+    from datetime import datetime
+
+    expected_secret = os.getenv("ADMIN_SECRET", "tubevibe-admin-2024")
+    if request.admin_secret != expected_secret:
+        raise HTTPException(status_code=403, detail="Invalid admin secret")
+
+    auth_service = get_auth_service()
+
+    if not auth_service.db:
+        raise HTTPException(status_code=500, detail="Database not available")
+
+    try:
+        async with auth_service.db.get_session() as session:
+            from sqlalchemy import func, delete
+            from app.services.database_service import UserModel, VideoModel
+            import uuid
+
+            keep_uuid = uuid.UUID(request.keep_user_id)
+            delete_uuid = uuid.UUID(request.delete_user_id)
+
+            # Get both users
+            keep_result = await session.execute(
+                select(UserModel).where(UserModel.id == keep_uuid)
+            )
+            keep_user = keep_result.scalar_one_or_none()
+
+            delete_result = await session.execute(
+                select(UserModel).where(UserModel.id == delete_uuid)
+            )
+            delete_user = delete_result.scalar_one_or_none()
+
+            if not keep_user:
+                raise HTTPException(status_code=404, detail=f"Keep user not found: {request.keep_user_id}")
+            if not delete_user:
+                raise HTTPException(status_code=404, detail=f"Delete user not found: {request.delete_user_id}")
+
+            # Count videos to be moved
+            video_count_result = await session.execute(
+                select(func.count()).select_from(VideoModel).where(VideoModel.user_id == delete_uuid)
+            )
+            videos_to_move = video_count_result.scalar() or 0
+
+            # Move videos from delete_user to keep_user
+            await session.execute(
+                sql_update(VideoModel)
+                .where(VideoModel.user_id == delete_uuid)
+                .values(user_id=keep_uuid, updated_at=datetime.utcnow())
+            )
+
+            # Copy google_id if keep_user doesn't have one
+            google_id_copied = False
+            if delete_user.google_id and not keep_user.google_id:
+                keep_user.google_id = delete_user.google_id
+                google_id_copied = True
+
+            # Delete the duplicate user
+            await session.execute(
+                delete(UserModel).where(UserModel.id == delete_uuid)
+            )
+
+            await session.commit()
+
+            return {
+                "success": True,
+                "message": f"Successfully merged users",
+                "videos_moved": videos_to_move,
+                "google_id_copied": google_id_copied,
+                "kept_user_id": request.keep_user_id,
+                "deleted_user_id": request.delete_user_id
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to merge users: {str(e)}")

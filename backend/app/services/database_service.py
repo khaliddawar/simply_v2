@@ -18,7 +18,7 @@ load_dotenv(env_path)
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy import Column, String, Integer, Boolean, DateTime, Text, ForeignKey, JSON, select, update, delete, text, UniqueConstraint
+from sqlalchemy import Column, String, Integer, Boolean, DateTime, Text, ForeignKey, JSON, select, update, delete, text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 
 logger = logging.getLogger(__name__)
@@ -392,10 +392,11 @@ class DatabaseService:
             }
 
     async def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
-        """Get user by email"""
+        """Get user by email (case-insensitive lookup)"""
         async with self.get_session() as session:
+            # Use case-insensitive comparison for email matching
             result = await session.execute(
-                select(UserModel).where(UserModel.email == email)
+                select(UserModel).where(func.lower(UserModel.email) == email.lower().strip())
             )
             user = result.scalar_one_or_none()
 
