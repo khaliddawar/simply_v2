@@ -162,15 +162,20 @@ export function LeftSidebar() {
   const [recentExpanded, setRecentExpanded] = useState(true);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
 
-  // Fetch ungrouped transcripts for "Recent" section using unified API
+  // Fetch ALL transcripts (we'll filter client-side for Recent vs Groups)
   const {
-    data: recentData,
-    isLoading: recentLoading,
-    error: recentError,
-  } = useLibrary({ ungroupedOnly: true });
+    data: allTranscriptsData,
+    isLoading: transcriptsLoading,
+    error: transcriptsError,
+  } = useLibrary({ limit: 500 });  // Fetch all transcripts
 
   // Fetch groups for sidebar navigation
   const { data: groups = [], isLoading: groupsLoading, error: groupsError } = useGroups();
+
+  // Filter transcripts: ungrouped for Recent section
+  const allTranscripts = allTranscriptsData?.transcripts ?? [];
+  const recentTranscripts = allTranscripts.filter(t => !t.group_id);
+  const totalTranscripts = allTranscriptsData?.total ?? 0;
 
   // Selected transcript state management (unified - no separate podcast selection)
   const { selectedTranscript, setSelectedTranscript } = useSelectedTranscript();
@@ -178,18 +183,14 @@ export function LeftSidebar() {
   // Chat video filter - sync transcript selection with RAG context
   const setVideoFilter = useChatStore((state) => state.setVideoFilter);
 
-  // Extract transcripts array from response, default to empty array
-  const recentTranscripts = recentData?.transcripts ?? [];
-  const totalTranscripts = recentData?.total ?? 0;
-
   // Auto-select the first (most recent) transcript when data loads
   useEffect(() => {
-    if (!recentLoading && recentTranscripts.length > 0 && !selectedTranscript) {
+    if (!transcriptsLoading && allTranscripts.length > 0 && !selectedTranscript) {
       // Transcripts are sorted by most recent first from API
-      setSelectedTranscript(recentTranscripts[0] as any); // Cast for now until Video type is updated
-      setVideoFilter(recentTranscripts[0].id);  // Set transcript context for RAG chat
+      setSelectedTranscript(allTranscripts[0] as any); // Cast for now until Video type is updated
+      setVideoFilter(allTranscripts[0].id);  // Set transcript context for RAG chat
     }
-  }, [recentLoading, recentTranscripts, selectedTranscript, setSelectedTranscript, setVideoFilter]);
+  }, [transcriptsLoading, allTranscripts, selectedTranscript, setSelectedTranscript, setVideoFilter]);
 
   // Handle transcript selection (unified - works for any source type)
   const handleSelectTranscript = (transcript: Transcript) => {
@@ -210,16 +211,12 @@ export function LeftSidebar() {
   const deleteGroupMutation = useDeleteGroup();
 
   // Combined loading state
-  const isLoading = recentLoading || groupsLoading;
-  const hasError = recentError || groupsError;
+  const isLoading = transcriptsLoading || groupsLoading;
+  const hasError = transcriptsError || groupsError;
 
-  // Get transcripts for a specific group
-  // Note: This will need to be updated to use useLibrary({ groupId }) for each expanded group
-  // For now, we filter from all transcripts client-side (will be refactored in a follow-up)
+  // Get transcripts for a specific group by filtering allTranscripts
   const getGroupTranscripts = (groupId: string): Transcript[] => {
-    // TODO: Replace with per-group useLibrary queries for better performance
-    // For now, return empty array - groups show count from API
-    return [];
+    return allTranscripts.filter(t => t.group_id === groupId);
   };
 
   const toggleGroup = (groupId: string) => {
