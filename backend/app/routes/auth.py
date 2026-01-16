@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from app.models.user import (
     UserCreate, UserLogin, UserResponse, TokenResponse,
-    GoogleOAuthRequest, PasswordResetRequest
+    GoogleOAuthRequest, GoogleUserDataRequest, PasswordResetRequest
 )
 from app.services.auth_service import get_auth_service, AuthService
 from app.services.authorizer_service import get_authorizer_service
@@ -456,6 +456,67 @@ async def verify_google_token(request: GoogleIdTokenRequest):
         expires_in=result["expires_in"],
         user=UserResponse(**result["user"])
     )
+
+
+@router.post("/google/extension", response_model=TokenResponse)
+async def google_oauth_extension(request: GoogleUserDataRequest):
+    """
+    Authenticate user with Google user data (used by Chrome extension).
+
+    The extension gets Google user info via OAuth access token,
+    then sends the user data here for account creation/login.
+    This bypasses the code exchange flow since extensions can't
+    securely store client secrets.
+    """
+    auth_service = get_auth_service()
+
+    if not auth_service.db:
+        raise HTTPException(status_code=500, detail="Database service not available")
+
+    try:
+        # Check if user exists by Google ID
+        user = await auth_service.db.get_user_by_google_id(request.google_id)
+
+        if not user:
+            # Check by email
+            user = await auth_service.db.get_user_by_email(request.email)
+
+            if user:
+                # Link Google account to existing user
+                await auth_service.db.update_user(user["id"], {"google_id": request.google_id})
+            else:
+                # Create new user
+                user = await auth_service.db.create_user(
+                    email=request.email,
+                    google_id=request.google_id,
+                    first_name=request.given_name or "",
+                    last_name=request.family_name or ""
+                )
+
+        if not user:
+            raise HTTPException(status_code=500, detail="Failed to create or retrieve user")
+
+        # Generate JWT token
+        jwt_token = auth_service.create_access_token(user["id"])
+
+        return TokenResponse(
+            access_token=jwt_token,
+            token_type="bearer",
+            expires_in=auth_service.settings.jwt_access_token_expire_minutes * 60,
+            user=UserResponse(
+                id=user["id"],
+                email=user["email"],
+                first_name=user.get("first_name"),
+                last_name=user.get("last_name"),
+                plan_type=user.get("plan_type", "free"),
+                pinecone_namespace=user.get("pinecone_namespace")
+            )
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Authentication failed: {str(e)}")
 
 
 @router.get("/google/login")

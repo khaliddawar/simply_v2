@@ -72,9 +72,19 @@ class User(BaseModel):
 
 
 class GoogleOAuthRequest(BaseModel):
-    """Schema for Google OAuth callback"""
+    """Schema for Google OAuth callback (code exchange)"""
     code: str
     redirect_uri: Optional[str] = None
+
+
+class GoogleUserDataRequest(BaseModel):
+    """Schema for Google OAuth with user data (used by Chrome extension)"""
+    google_id: str
+    email: EmailStr
+    name: Optional[str] = None
+    given_name: Optional[str] = None
+    family_name: Optional[str] = None
+    picture: Optional[str] = None
 
 
 class PasswordResetRequest(BaseModel):

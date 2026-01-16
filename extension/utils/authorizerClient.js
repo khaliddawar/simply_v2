@@ -264,75 +264,100 @@ class AuthorizerClient {
     }
 
     /**
-     * Initiate Google OAuth authentication via Authorizer
-     * Uses chrome.identity.launchWebAuthFlow for the OAuth flow
+     * Initiate Google OAuth authentication
+     * Uses direct Google OAuth, then syncs with TubeVibe backend
+     * (Authorizer's OAuth redirect doesn't work with Chrome extensions due to cookie limitations)
      * @returns {Promise<object>} - Authentication response with tokens and user data
      */
     static async googleOAuth() {
         this.log('GOOGLE_OAUTH_START');
 
         try {
-            // Get the Chrome extension redirect URL
+            // Step 1: Get Google OAuth token directly using Chrome identity API
+            // Using the same Google Client ID configured in Authorizer
+            const clientId = '1049678014825-r2sgcffbksmm2jb8ikkdvdpfv23j8v7a.apps.googleusercontent.com';
             const redirectUri = chrome.identity.getRedirectURL();
+
             this.log('GOOGLE_OAUTH_REDIRECT_URI', { redirectUri });
 
-            // Build the Authorizer OAuth URL
-            const authUrl = `${this.AUTHORIZER_URL}/oauth_login/google?redirect_uri=${encodeURIComponent(redirectUri)}`;
-            this.log('GOOGLE_OAUTH_AUTH_URL', { authUrl });
+            // Build Google OAuth URL - request both access_token and id_token
+            const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+            authUrl.searchParams.set('client_id', clientId);
+            authUrl.searchParams.set('response_type', 'token');
+            authUrl.searchParams.set('redirect_uri', redirectUri);
+            authUrl.searchParams.set('scope', 'openid email profile');
+
+            this.log('GOOGLE_OAUTH_AUTH_URL', { authUrl: authUrl.toString() });
 
             // Launch the OAuth flow
             const responseUrl = await chrome.identity.launchWebAuthFlow({
-                url: authUrl,
+                url: authUrl.toString(),
                 interactive: true
             });
 
-            this.log('GOOGLE_OAUTH_RESPONSE_URL', { responseUrl: responseUrl.substring(0, 100) });
+            console.log('[AuthorizerClient] Google OAuth response URL received');
 
             // Parse the response URL to extract tokens
             const url = new URL(responseUrl);
-
-            // Authorizer may return tokens in hash or query params
-            let params = new URLSearchParams(url.hash.substring(1));
-            if (!params.get('access_token')) {
-                params = new URLSearchParams(url.search);
-            }
+            const params = new URLSearchParams(url.hash.substring(1));
 
             const accessToken = params.get('access_token');
-            const refreshToken = params.get('refresh_token');
             const expiresIn = parseInt(params.get('expires_in') || '3600');
 
             if (!accessToken) {
-                // Check for error in response
                 const error = params.get('error') || params.get('error_description');
                 if (error) {
                     throw new Error(error);
                 }
-                throw new Error('Failed to get access token from OAuth response');
+                throw new Error('Failed to get access token from Google OAuth');
             }
 
-            this.log('GOOGLE_OAUTH_TOKENS_EXTRACTED', { hasAccessToken: !!accessToken, hasRefreshToken: !!refreshToken });
+            this.log('GOOGLE_OAUTH_TOKEN_RECEIVED', { hasAccessToken: !!accessToken });
 
-            // Get user profile from Authorizer using the access token
-            const userProfile = await this.getAuthorizerUserProfile(accessToken);
-
-            // Exchange for TubeVibe token
-            const tubeVibeData = await this.exchangeForTubeVibeToken({
-                access_token: accessToken,
-                refresh_token: refreshToken,
-                expires_in: expiresIn,
-                user: userProfile
+            // Step 2: Get user info from Google
+            const userInfoResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`
+                }
             });
 
-            this.log('GOOGLE_OAUTH_SUCCESS');
+            if (!userInfoResponse.ok) {
+                throw new Error('Failed to get user info from Google');
+            }
+
+            const googleUser = await userInfoResponse.json();
+            this.log('GOOGLE_USER_INFO', { email: googleUser.email });
+
+            // Step 3: Send to TubeVibe backend to create/get user
+            const backendResponse = await fetch(`${this.API_BASE_URL}/api/auth/google/extension`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    google_id: googleUser.id,
+                    email: googleUser.email,
+                    name: googleUser.name,
+                    given_name: googleUser.given_name,
+                    family_name: googleUser.family_name,
+                    picture: googleUser.picture
+                }),
+            });
+
+            if (!backendResponse.ok) {
+                const errorData = await backendResponse.json().catch(() => ({}));
+                throw new Error(errorData.detail || 'Failed to authenticate with backend');
+            }
+
+            const backendData = await backendResponse.json();
+            this.log('GOOGLE_OAUTH_SUCCESS', { email: backendData.user?.email });
 
             return {
                 success: true,
-                access_token: accessToken,
-                refresh_token: refreshToken,
-                expires_in: expiresIn,
-                authorizer_user: userProfile,
-                tubevibe_user: tubeVibeData.user,
-                user: tubeVibeData.user || userProfile,
+                access_token: backendData.access_token || accessToken,
+                refresh_token: null,
+                expires_in: backendData.expires_in || expiresIn,
+                user: backendData.user || googleUser,
                 provider: 'google'
             };
 

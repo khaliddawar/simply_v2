@@ -17,11 +17,10 @@ importScripts('utils/authorizerClient.js');
 
 // ============================================================================
 // AUTHENTICATION PROVIDER TOGGLE
-// Set to false to use backend auth endpoints (recommended - same as dashboard)
-// The backend internally handles Authorizer authentication and returns a backend JWT
-// Set to true only if you want the extension to call Authorizer directly (not recommended)
+// Set to true to use Authorizer for authentication (including Google OAuth)
+// The extension calls Authorizer directly, then exchanges tokens with TubeVibe backend
 // ============================================================================
-const USE_AUTHORIZER = false;
+const USE_AUTHORIZER = true;
 
 // Handle extension installation
 chrome.runtime.onInstalled.addListener(() => {
@@ -625,8 +624,6 @@ async function handleGoogleAuth() {
       throw new Error('Failed to get access token from OAuth response');
     }
 
-    console.log('✅ [Background] Access token received from OAuth flow');
-
     // Step 2: Get user info using the access token
     let userInfo = null;
     try {
@@ -639,7 +636,6 @@ async function handleGoogleAuth() {
       if (userResponse.ok) {
         const userData = await userResponse.json();
         userInfo = userData; // Google API returns user data directly
-        console.log('👤 Google user info retrieved:', userInfo?.email);
 
         // Step 3: Send user data to backend for account creation/login
         const backendResponse = await fetch(`${API_BASE_URL}/api/auth/google`, {
@@ -658,13 +654,10 @@ async function handleGoogleAuth() {
         });
 
         if (!backendResponse.ok) {
-          const errorData = await backendResponse.text();
-          console.error('❌ Backend authentication failed:', errorData);
           throw new Error('Failed to authenticate with backend');
         }
 
         const backendData = await backendResponse.json();
-        console.log('✅ Backend authentication successful');
 
         // Step 4: Store tokens and user data
         const storageData = {
@@ -676,7 +669,6 @@ async function handleGoogleAuth() {
         };
 
         await chrome.storage.local.set(storageData);
-        console.log('💾 Google authentication data stored successfully');
 
         return {
           success: true,
@@ -691,12 +683,11 @@ async function handleGoogleAuth() {
         throw new Error('Failed to fetch user info from Google');
       }
     } catch (error) {
-      console.warn('⚠️ Could not complete Google authentication:', error.message);
       throw error;
     }
 
   } catch (error) {
-    console.error('❌ Google OAuth error:', error);
+    console.error('Google OAuth error:', error);
 
     // Provide user-friendly error messages
     let userMessage = error.message;
@@ -739,14 +730,6 @@ async function handleTranscriptProcessing(transcriptData) {
     // Parse duration string to seconds
     const durationSeconds = parseDuration(transcriptData.duration);
 
-    console.log(`🌐 Making API call to: ${endpoint}`);
-    console.log('📝 Request payload:', {
-      source_type: 'youtube',
-      external_id: transcriptData.video_id,
-      title: transcriptData.title,
-      transcript_length: transcriptData.transcript?.length
-    });
-
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: headers,
@@ -765,15 +748,12 @@ async function handleTranscriptProcessing(transcriptData) {
       })
     });
 
-    console.log(`📡 API response status: ${response.status}`);
-
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       throw new Error(errorData.detail || `API request failed: ${response.status}`);
     }
 
     const result_data = await response.json();
-    console.log('✅ Transcript saved successfully:', result_data);
 
     // Store the saved transcript ID for reference
     await chrome.storage.local.set({
@@ -790,7 +770,7 @@ async function handleTranscriptProcessing(transcriptData) {
     };
 
   } catch (error) {
-    console.error('❌ Transcript processing error:', error);
+    console.error('Transcript processing error:', error);
     throw error;
   }
 }
@@ -800,7 +780,6 @@ async function pollForJobCompletion(jobId, accessToken) {
   const pollInterval = 5000;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      console.log(`🔄 Polling job ${jobId}, attempt ${attempt}/${maxAttempts}`);
               const response = await fetch(`${API_BASE_URL}/api/yt_job/${jobId}`, {
         headers: {
           'Authorization': `Bearer ${accessToken}`
@@ -818,7 +797,6 @@ async function pollForJobCompletion(jobId, accessToken) {
       // Wait before next poll
       await new Promise(resolve => setTimeout(resolve, pollInterval));
     } catch (error) {
-      console.error(`❌ Error polling job ${jobId}:`, error);
       if (attempt === maxAttempts) {
         throw error;
       }
@@ -868,16 +846,14 @@ async function handleUpgradeInitiation(data) {
       throw new Error(result.message || 'Failed to create checkout session');
     }
   } catch (error) {
-    console.error('❌ Upgrade initiation error:', error);
+    console.error('Upgrade initiation error:', error);
     throw error;
   }
 }
 
 // Handle subscription status check
 async function handleGetSubscriptionStatus() {
-  console.log('🔍 [DEBUG] handleGetSubscriptionStatus() called');
   try {
-    console.log('🔍 [DEBUG] Getting access token...');
     const accessToken = await getValidAccessToken();
     if (!accessToken) {
       return {
@@ -895,33 +871,14 @@ async function handleGetSubscriptionStatus() {
           'Authorization': `Bearer ${accessToken}`
         }
       });
-      
+
       if (userResponse.ok) {
         userInfo = await userResponse.json();
-        // Enhanced debugging for plan issue
-        console.log('🔍 [DEBUG] Raw API response from /api/auth/me:', JSON.stringify(userInfo, null, 2));
-        console.log('🔍 [DEBUG] Extracted plan value:', userInfo?.plan);
-        console.log('🔍 [DEBUG] Plan type check:', typeof userInfo?.plan);
-        
         // Update cached user info in Chrome storage
         await chrome.storage.local.set({ 'user_info': userInfo });
-        console.log('✅ User info refreshed and cached:', userInfo?.email, userInfo?.plan);
-      } else {
-        console.error('❌ [DEBUG] /api/auth/me failed:', userResponse.status, userResponse.statusText);
-        const errorText = await userResponse.text();
-        console.error('❌ [DEBUG] Error response body:', errorText);
       }
     } catch (error) {
-      console.warn('⚠️ Could not refresh user info:', error);
-      console.error('🔍 [DEBUG] Full error details:', error);
-    }
-    
-    // Debug: Check what's actually stored in Chrome storage
-    try {
-      const storageResult = await chrome.storage.local.get(['user_info']);
-      console.log('🔍 [DEBUG] Chrome storage user_info:', JSON.stringify(storageResult.user_info, null, 2));
-    } catch (storageError) {
-      console.error('❌ [DEBUG] Error reading Chrome storage:', storageError);
+      // Could not refresh user info, continue with subscription check
     }
 
     // Then get subscription details
@@ -938,10 +895,9 @@ async function handleGetSubscriptionStatus() {
 
     const subscriptionData = await response.json();
     
-    // 🔧 CRITICAL FIX: Merge subscription plan into userInfo
+    // Merge subscription plan into userInfo
     if (userInfo && subscriptionData?.plan) {
       userInfo.plan = subscriptionData.plan;
-      console.log('🔧 [FIX] Added plan to userInfo:', userInfo.email, userInfo.plan);
     }
     
     return {
@@ -951,7 +907,7 @@ async function handleGetSubscriptionStatus() {
       userInfo: userInfo // Include refreshed user info in response
     };
   } catch (error) {
-    console.error('❌ Subscription status error:', error);
+    console.error('Subscription status error:', error);
     return {
       success: false,
       error: error.message
@@ -968,7 +924,6 @@ async function handleTokenRefresh() {
     const authProvider = storageResult.auth_provider;
 
     if (!refreshToken) {
-      console.error('❌ No refresh token available');
       return {
         success: false,
         error: 'No refresh token available'
@@ -979,12 +934,9 @@ async function handleTokenRefresh() {
     // AUTHORIZER TOKEN REFRESH PATH
     // ========================================================================
     if (authProvider === 'authorizer' && USE_AUTHORIZER) {
-      console.log('🔄 [Authorizer] Refreshing token via Authorizer...');
-
       const result = await AuthorizerClient.refreshToken(refreshToken);
 
       if (!result.success) {
-        console.error('❌ [Authorizer] Token refresh failed:', result.error);
         return {
           success: false,
           error: result.error || 'Token refresh failed'
@@ -999,8 +951,6 @@ async function handleTokenRefresh() {
       };
       await chrome.storage.local.set(newStorageData);
 
-      console.log('✅ [Authorizer] Token refresh successful');
-
       return {
         success: true,
         access_token: result.access_token,
@@ -1012,7 +962,6 @@ async function handleTokenRefresh() {
     // ========================================================================
     // LEGACY TOKEN REFRESH PATH (fallback)
     // ========================================================================
-    console.log('🔄 [Legacy] Attempting to refresh access token...');
 
     // Call backend refresh endpoint
     const response = await fetch(`${API_BASE_URL}/api/auth/refresh`, {
@@ -1026,7 +975,6 @@ async function handleTokenRefresh() {
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       const errorMessage = errorData.detail || errorData.message || `HTTP ${response.status}`;
-      console.error('❌ Token refresh failed:', errorMessage);
       return {
         success: false,
         error: `Token refresh failed: ${errorMessage}`
@@ -1034,7 +982,6 @@ async function handleTokenRefresh() {
     }
 
     const tokenData = await response.json();
-    console.log('✅ Token refresh successful');
 
     // Update storage with new tokens
     const storageData = {
@@ -1044,7 +991,6 @@ async function handleTokenRefresh() {
     };
 
     await chrome.storage.local.set(storageData);
-    console.log('💾 Updated token storage');
 
     return {
       success: true,
@@ -1054,7 +1000,7 @@ async function handleTokenRefresh() {
     };
 
   } catch (error) {
-    console.error('❌ Token refresh error:', error);
+    console.error('Token refresh error:', error);
     return {
       success: false,
       error: error.message
@@ -1076,15 +1022,11 @@ async function handleMagicLinkRequest(data) {
       };
     }
 
-    console.log('🔗 [Authorizer] Requesting magic link for:', data.email);
-
     const result = await AuthorizerClient.requestMagicLink(data.email);
 
     if (!result.success) {
       throw new Error(result.error || 'Failed to send magic link');
     }
-
-    console.log('✅ [Authorizer] Magic link sent successfully');
 
     return {
       success: true,
@@ -1092,7 +1034,7 @@ async function handleMagicLinkRequest(data) {
     };
 
   } catch (error) {
-    console.error('❌ Magic link error:', error);
+    console.error('Magic link error:', error);
     return {
       success: false,
       error: error.message || 'Failed to send magic link'
@@ -1114,15 +1056,11 @@ async function handleForgotPassword(data) {
       };
     }
 
-    console.log('🔑 [Authorizer] Requesting password reset for:', data.email);
-
     const result = await AuthorizerClient.forgotPassword(data.email);
 
     if (!result.success) {
       throw new Error(result.error || 'Failed to send password reset email');
     }
-
-    console.log('✅ [Authorizer] Password reset email sent successfully');
 
     return {
       success: true,
@@ -1130,7 +1068,7 @@ async function handleForgotPassword(data) {
     };
 
   } catch (error) {
-    console.error('❌ Forgot password error:', error);
+    console.error('Forgot password error:', error);
     return {
       success: false,
       error: error.message || 'Failed to send password reset email'
@@ -1139,13 +1077,12 @@ async function handleForgotPassword(data) {
 }
 
 // ============================================================================
-// NEW HANDLERS FOR TUBEVIBE LIBRARY INTEGRATION
+// HANDLERS FOR TUBEVIBE LIBRARY INTEGRATION
 // ============================================================================
 
 // Get auth status with TEST_MODE support
 async function handleGetAuthStatus() {
   if (TEST_MODE) {
-    console.log('🧪 [TEST_MODE] Returning test user authentication');
     return {
       success: true,
       isAuthenticated: true,
@@ -1175,13 +1112,6 @@ async function handleGetAuthStatus() {
 
 // Save video transcript to TubeVibe Library (Unified Transcripts API)
 async function handleSaveToLibrary(videoData) {
-  console.log('📚 [handleSaveToLibrary] Starting save process...');
-  console.log('📊 Video data:', {
-    video_id: videoData.video_id,
-    title: videoData.title,
-    transcript_length: videoData.transcript?.length
-  });
-
   try {
     // Get valid access token for authentication
     const accessToken = await getValidAccessToken();
@@ -1218,7 +1148,6 @@ async function handleSaveToLibrary(videoData) {
     }
 
     const result = await response.json();
-    console.log('✅ [handleSaveToLibrary] Transcript saved successfully:', result);
 
     // Store the saved transcript ID for reference
     await chrome.storage.local.set({
@@ -1235,7 +1164,7 @@ async function handleSaveToLibrary(videoData) {
     };
 
   } catch (error) {
-    console.error('❌ [handleSaveToLibrary] Error:', error);
+    console.error('Save to library error:', error);
     throw error;
   }
 }
@@ -1256,13 +1185,11 @@ function parseDuration(durationStr) {
 // Check if video is already saved in library (Unified Transcripts API)
 async function handleCheckVideoSaved(data) {
   const youtubeId = data.video_id || data.youtube_id;
-  console.log('🔍 [handleCheckVideoSaved] Checking video:', youtubeId);
 
   try {
     // First check local storage cache for quick response
     const cached = await chrome.storage.local.get([`saved_video_${youtubeId}`]);
     if (cached[`saved_video_${youtubeId}`]) {
-      console.log('✅ [handleCheckVideoSaved] Found in local cache');
       return {
         success: true,
         isSaved: true,
@@ -1274,7 +1201,6 @@ async function handleCheckVideoSaved(data) {
     // Get valid access token for backend check
     const accessToken = await getValidAccessToken();
     if (!accessToken) {
-      console.log('⚠️ [handleCheckVideoSaved] Not authenticated, cannot check backend');
       return {
         success: true,
         isSaved: false,
@@ -1283,7 +1209,6 @@ async function handleCheckVideoSaved(data) {
     }
 
     // Check backend using unified transcripts API
-    console.log('🔍 [handleCheckVideoSaved] Checking backend...');
     const response = await fetch(`${API_BASE_URL}/api/transcripts/check/youtube/${youtubeId}`, {
       method: 'GET',
       headers: {
@@ -1292,7 +1217,6 @@ async function handleCheckVideoSaved(data) {
     });
 
     if (!response.ok) {
-      console.warn('⚠️ [handleCheckVideoSaved] Backend check failed:', response.status);
       return {
         success: true,
         isSaved: false,
@@ -1301,7 +1225,6 @@ async function handleCheckVideoSaved(data) {
     }
 
     const result = await response.json();
-    console.log('✅ [handleCheckVideoSaved] Backend response:', result);
 
     // Cache the result if video is saved
     if (result.exists && result.transcript_id) {
@@ -1311,7 +1234,6 @@ async function handleCheckVideoSaved(data) {
           title: result.title
         }
       });
-      console.log('💾 [handleCheckVideoSaved] Cached transcript info');
     }
 
     return {
@@ -1322,7 +1244,7 @@ async function handleCheckVideoSaved(data) {
     };
 
   } catch (error) {
-    console.error('❌ [handleCheckVideoSaved] Error:', error);
+    console.error('Check video saved error:', error);
     return {
       success: false,
       isSaved: false,
@@ -1336,7 +1258,6 @@ async function handleGetUserVideos(data) {
   const limit = data?.limit || 10;
   const offset = ((data?.page || 1) - 1) * limit;
   const sourceType = data?.source_type || null; // Optional: filter by source type
-  console.log(`📚 [handleGetUserVideos] Fetching transcripts (offset: ${offset}, limit: ${limit})`);
 
   try {
     // Get valid access token for authentication
@@ -1373,7 +1294,6 @@ async function handleGetUserVideos(data) {
     }
 
     const result = await response.json();
-    console.log(`✅ [handleGetUserVideos] Retrieved ${result.transcripts?.length || 0} transcripts`);
 
     // Map transcripts to legacy video format for backward compatibility
     const videos = (result.transcripts || []).map(t => ({
@@ -1398,7 +1318,7 @@ async function handleGetUserVideos(data) {
     };
 
   } catch (error) {
-    console.error('❌ [handleGetUserVideos] Error:', error);
+    console.error('Get user videos error:', error);
     return {
       success: false,
       error: error.message
@@ -1408,9 +1328,6 @@ async function handleGetUserVideos(data) {
 
 // Chat with video transcript using Pinecone Assistant
 async function handleChatWithVideo(data) {
-  console.log('💬 [handleChatWithVideo] Query:', data.query);
-  console.log('💬 [handleChatWithVideo] Video ID:', data.video_id);
-
   try {
     // Get valid access token for authentication
     const accessToken = await getValidAccessToken();
@@ -1437,7 +1354,6 @@ async function handleChatWithVideo(data) {
     }
 
     const result = await response.json();
-    console.log('✅ [handleChatWithVideo] Response:', result);
 
     return {
       success: true,
@@ -1446,7 +1362,7 @@ async function handleChatWithVideo(data) {
     };
 
   } catch (error) {
-    console.error('❌ [handleChatWithVideo] Error:', error);
+    console.error('Chat with video error:', error);
     throw error;
   }
 }
@@ -1455,14 +1371,6 @@ async function handleChatWithVideo(data) {
 // Generate video summary using TubeVibe Library (Unified Transcripts API)
 // ============================================================================
 async function handleGenerateVideoSummary(data) {
-  console.log('📝 [handleGenerateVideoSummary] Starting summary generation...');
-  console.log('📊 Data:', {
-    video_id: data.video_id,
-    title: data.title,
-    has_transcript: !!data.transcript,
-    transcript_length: data.transcript?.length
-  });
-
   try {
     // Step 1: Check if video is already saved to library
     let transcriptId = null;
@@ -1470,16 +1378,13 @@ async function handleGenerateVideoSummary(data) {
 
     if (cached[`saved_video_${data.video_id}`]) {
       transcriptId = cached[`saved_video_${data.video_id}`].id;
-      console.log('📚 Transcript already in library:', transcriptId);
     } else {
       // Step 2: Save video to library first
-      console.log('📚 Saving transcript to library first...');
       const saveResult = await handleSaveToLibrary(data);
       if (!saveResult.success) {
         throw new Error(saveResult.error || 'Failed to save transcript to library');
       }
       transcriptId = saveResult.video.id;
-      console.log('✅ Transcript saved to library:', transcriptId);
     }
 
     // Step 3: Get access token for summary endpoint
@@ -1489,7 +1394,6 @@ async function handleGenerateVideoSummary(data) {
     }
 
     // Step 4: Call the unified transcripts summary endpoint
-    console.log('🤖 Calling summary endpoint for transcript:', transcriptId);
     const response = await fetch(`${API_BASE_URL}/api/transcripts/${transcriptId}/summary`, {
       method: 'GET',
       headers: {
@@ -1504,7 +1408,6 @@ async function handleGenerateVideoSummary(data) {
     }
 
     const summary = await response.json();
-    console.log('✅ [handleGenerateVideoSummary] Summary generated successfully');
 
     // Format the summary for display
     const formattedHtml = formatSummaryAsHtml(summary);
@@ -1516,7 +1419,7 @@ async function handleGenerateVideoSummary(data) {
     };
 
   } catch (error) {
-    console.error('❌ [handleGenerateVideoSummary] Error:', error);
+    console.error('Generate video summary error:', error);
     throw error;
   }
 }
@@ -1525,13 +1428,6 @@ async function handleGenerateVideoSummary(data) {
 // Email video summary using TubeVibe Library (Unified Transcripts API)
 // ============================================================================
 async function handleEmailVideoSummary(data) {
-  console.log('📧 [handleEmailVideoSummary] Sending email...');
-  console.log('📊 Data:', {
-    video_id: data.video_id,
-    recipient_email: data.recipient_email,
-    has_summary: !!data.summary_html
-  });
-
   try {
     // Step 1: Check if video is already saved to library
     let transcriptId = null;
@@ -1539,16 +1435,13 @@ async function handleEmailVideoSummary(data) {
 
     if (cached[`saved_video_${data.video_id}`]) {
       transcriptId = cached[`saved_video_${data.video_id}`].id;
-      console.log('📚 Transcript found in library:', transcriptId);
     } else {
       // Transcript not in library - save it first
-      console.log('📚 Transcript not in library, saving first...');
       const saveResult = await handleSaveToLibrary(data);
       if (!saveResult.success) {
         throw new Error(saveResult.error || 'Failed to save transcript to library before emailing');
       }
       transcriptId = saveResult.video.id;
-      console.log('✅ Transcript saved to library:', transcriptId);
     }
 
     // Step 2: Get access token for email endpoint
@@ -1558,7 +1451,6 @@ async function handleEmailVideoSummary(data) {
     }
 
     // Step 3: Call the unified transcripts email endpoint
-    console.log('📧 Calling email endpoint for transcript:', transcriptId);
     const response = await fetch(`${API_BASE_URL}/api/transcripts/${transcriptId}/email-summary`, {
       method: 'POST',
       headers: {
@@ -1583,7 +1475,6 @@ async function handleEmailVideoSummary(data) {
     }
 
     const result = await response.json();
-    console.log('✅ [handleEmailVideoSummary] Email sent successfully');
 
     return {
       success: true,
@@ -1592,7 +1483,7 @@ async function handleEmailVideoSummary(data) {
     };
 
   } catch (error) {
-    console.error('❌ [handleEmailVideoSummary] Error:', error);
+    console.error('Email video summary error:', error);
     throw error;
   }
 }
