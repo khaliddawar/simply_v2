@@ -194,8 +194,10 @@ export function LeftSidebar() {
 
   // Handle transcript selection (unified - works for any source type)
   const handleSelectTranscript = (transcript: Transcript) => {
+    console.log('handleSelectTranscript called:', transcript.id, transcript.title);
     setSelectedTranscript(transcript as any); // Cast for now until Video type is updated
     setVideoFilter(transcript.id);  // Set transcript context for RAG chat
+    console.log('videoFilter set to:', transcript.id);
   };
 
   // Check if a transcript is currently selected
