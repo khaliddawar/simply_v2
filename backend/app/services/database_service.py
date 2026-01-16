@@ -909,7 +909,7 @@ class DatabaseService:
             return self._group_to_dict(group)
 
     async def list_groups(self, user_id: str) -> List[Dict[str, Any]]:
-        """List groups for a user"""
+        """List groups for a user with video counts"""
         async with self.get_session() as session:
             result = await session.execute(
                 select(VideoGroupModel)
@@ -918,7 +918,22 @@ class DatabaseService:
             )
             groups = result.scalars().all()
 
-            return [self._group_to_dict(g) for g in groups]
+            # Calculate video count for each group
+            groups_with_counts = []
+            for group in groups:
+                # Count videos in this group
+                count_result = await session.execute(
+                    select(func.count()).select_from(VideoModel).where(
+                        VideoModel.group_id == group.id
+                    )
+                )
+                video_count = count_result.scalar() or 0
+
+                group_dict = self._group_to_dict(group)
+                group_dict["video_count"] = video_count
+                groups_with_counts.append(group_dict)
+
+            return groups_with_counts
 
     async def get_group(self, group_id: str, user_id: str) -> Optional[Dict[str, Any]]:
         """Get group by ID"""
