@@ -398,6 +398,88 @@ export interface PodcastSummaryResponse {
 }
 
 // ============================================
+// Unified Transcript Types
+// ============================================
+
+/**
+ * Source type for unified transcripts
+ * Indicates where the transcript originated from
+ */
+export type SourceType = 'youtube' | 'fireflies' | 'zoom' | 'manual' | 'pdf' | 'audio';
+
+/**
+ * YouTube-specific metadata for video transcripts
+ */
+export interface YouTubeMetadata {
+  youtube_id: string;
+  channel_name: string;
+  duration_seconds: number;
+  thumbnail_url: string;
+}
+
+/**
+ * Meeting-specific metadata for Fireflies/Zoom transcripts
+ */
+export interface MeetingMetadata {
+  subject?: string;
+  organizer_email?: string;
+  participants?: string[];
+  meeting_date?: string;
+  duration_minutes?: number;
+}
+
+/**
+ * File-specific metadata for PDF and audio transcripts (future use)
+ */
+export interface FileMetadata {
+  filename: string;
+  file_size_bytes?: number;
+  page_count?: number;  // For PDFs
+  duration_seconds?: number;  // For audio files
+}
+
+/**
+ * Unified transcript record from the library
+ * Matches backend TranscriptResponse model
+ */
+export interface Transcript {
+  id: string;
+  user_id: string;
+  group_id: string | null;
+  source_type: SourceType;
+  external_id: string | null;
+  title: string;
+  transcript_length: number | null;
+  has_summary: boolean;
+  summary_generated_at: string | null;
+  metadata: YouTubeMetadata | MeetingMetadata | FileMetadata;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Transcript group for organization
+ * Matches backend TranscriptGroupResponse model
+ */
+export interface TranscriptGroup {
+  id: string;
+  name: string;
+  description: string | null;
+  color: string;
+  transcript_count: number;
+  created_at: string;
+}
+
+/**
+ * Paginated transcript list response
+ * Matches backend TranscriptListResponse model
+ */
+export interface TranscriptListResponse {
+  transcripts: Transcript[];
+  total: number;
+}
+
+// ============================================
 // API Error Types
 // ============================================
 

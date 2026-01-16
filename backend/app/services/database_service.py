@@ -18,7 +18,7 @@ load_dotenv(env_path)
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy import Column, String, Integer, Boolean, DateTime, Text, ForeignKey, JSON, select, update, delete, text
+from sqlalchemy import Column, String, Integer, Boolean, DateTime, Text, ForeignKey, JSON, select, update, delete, text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 
 logger = logging.getLogger(__name__)
@@ -131,6 +131,60 @@ class PodcastModel(Base):
     summary_generated_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class TranscriptModel(Base):
+    """
+    Unified transcripts table - stores transcripts from all sources.
+
+    This is the unified model that replaces separate VideoModel and PodcastModel
+    for new code paths. Supports YouTube, Fireflies, Zoom, manual uploads,
+    PDFs, audio files, and future source types.
+
+    Metadata examples by source_type:
+    - youtube: {"youtube_id": "...", "channel_name": "...", "thumbnail_url": "...", "duration_seconds": 123}
+    - fireflies: {"meeting_id": "...", "subject": "...", "organizer_email": "...", "participants": [...], "meeting_date": "...", "duration_minutes": 45}
+    - zoom: {"meeting_id": "...", "subject": "...", "participants": [...], "meeting_date": "...", "duration_minutes": 60}
+    - manual: {"description": "...", "upload_date": "..."}
+    - pdf: {"filename": "...", "page_count": 15, "file_size_bytes": 1024000}
+    - audio: {"filename": "...", "duration_seconds": 3600, "file_size_bytes": 50000000}
+    """
+    __tablename__ = "transcripts"
+
+    # Identity
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    group_id = Column(UUID(as_uuid=True), ForeignKey("video_groups.id", ondelete="SET NULL"), nullable=True, index=True)
+
+    # Source identification
+    source_type = Column(String(50), nullable=False, index=True)  # 'youtube', 'fireflies', 'zoom', 'manual', 'pdf', 'audio'
+    external_id = Column(String(255), nullable=True, index=True)  # youtube_id, meeting_id, filename, etc.
+
+    # Core content
+    title = Column(String(500), nullable=False)
+    transcript_text = Column(Text, nullable=True)
+    transcript_length = Column(Integer, nullable=True)
+
+    # Pinecone integration
+    pinecone_file_id = Column(String(100), nullable=True)
+
+    # Summary cache
+    summary_data = Column(JSON, nullable=True)
+    summary_generated_at = Column(DateTime, nullable=True)
+
+    # Source-specific metadata (flexible JSON)
+    # Note: Using 'source_metadata' instead of 'metadata' to avoid SQLAlchemy reserved attribute conflict
+    source_metadata = Column(JSON, default={})
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Unique constraint: one transcript per (user, source_type, external_id)
+    # This prevents duplicates like the same YouTube video being added twice
+    __table_args__ = (
+        UniqueConstraint('user_id', 'source_type', 'external_id', name='uq_user_source_external'),
+    )
 
 
 # =============================================================================

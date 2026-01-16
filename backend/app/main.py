@@ -13,7 +13,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 from app.settings import get_settings
-from app.routes import auth, videos, groups, search, payments, webhooks, podcasts
+from app.routes import auth, videos, groups, search, payments, webhooks, podcasts, transcripts
 
 # Configure logging
 logging.basicConfig(
@@ -55,6 +55,13 @@ async def lifespan(app: FastAPI):
         video_service.set_database(db)
         app.state.video = video_service
         logger.info("Video service configured with database")
+
+        # Inject database into transcript service (unified API)
+        from app.services.transcript_service import get_transcript_service
+        transcript_service = get_transcript_service()
+        transcript_service.set_database(db)
+        app.state.transcript = transcript_service
+        logger.info("Transcript service configured with database")
 
         # Inject database into Authorizer service (if configured)
         from app.services.authorizer_service import get_authorizer_service
@@ -127,6 +134,7 @@ app.include_router(groups.router, prefix="/api/groups", tags=["Groups"])
 app.include_router(search.router, prefix="/api/search", tags=["Search"])
 app.include_router(payments.router, prefix="/api/payments", tags=["Payments"])
 app.include_router(podcasts.router, prefix="/api/podcasts", tags=["Podcasts"])
+app.include_router(transcripts.router, tags=["Transcripts"])  # Unified transcript API (prefix defined in router)
 app.include_router(webhooks.router, prefix="/webhook", tags=["Webhooks"])
 
 

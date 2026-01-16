@@ -4,44 +4,72 @@
  * Zustand store for managing the currently selected transcript
  * in the dashboard. Used for displaying transcript details in the
  * main content area.
+ *
+ * Now uses the unified Transcript type to support all source types
+ * (YouTube videos, meetings, file uploads, etc.)
  */
 import { create } from 'zustand';
-import type { Video } from '@/types/api';
+import type { Transcript } from '@/types/api';
 
 // ============================================
 // Store Types
 // ============================================
 
 interface SelectedTranscriptState {
-  // State
-  selectedTranscript: Video | null;
+  // Primary state (new naming convention)
+  selected: Transcript | null;
 
-  // Actions
-  setSelectedTranscript: (transcript: Video | null) => void;
+  // Primary actions (new naming convention)
+  setSelected: (transcript: Transcript | null) => void;
   clearSelection: () => void;
+
+  // Aliases for backward compatibility with old code
+  selectedTranscript: Transcript | null;
+  setSelectedTranscript: (transcript: Transcript | null) => void;
 }
 
 // ============================================
 // Selected Transcript Store Implementation
 // ============================================
 
-export const useSelectedTranscript = create<SelectedTranscriptState>((set) => ({
+export const useSelectedTranscript = create<SelectedTranscriptState>((set, get) => ({
   // Initial state
-  selectedTranscript: null,
+  selected: null,
 
   /**
-   * Set the currently selected transcript
-   * @param transcript - The video/transcript to select, or null to clear selection
+   * Set the currently selected transcript (new API)
+   * @param transcript - The transcript to select, or null to clear selection
    */
-  setSelectedTranscript: (transcript: Video | null) => {
-    set({ selectedTranscript: transcript });
+  setSelected: (transcript: Transcript | null) => {
+    set({ selected: transcript });
   },
 
   /**
    * Clear the current selection
    */
   clearSelection: () => {
-    set({ selectedTranscript: null });
+    set({ selected: null });
+  },
+
+  // ============================================
+  // Backward Compatibility Aliases
+  // ============================================
+
+  /**
+   * Alias for `selected` - for backward compatibility
+   * @deprecated Use `selected` instead
+   */
+  get selectedTranscript() {
+    return get().selected;
+  },
+
+  /**
+   * Alias for `setSelected` - for backward compatibility
+   * @deprecated Use `setSelected` instead
+   * @param transcript - The transcript to select, or null to clear selection
+   */
+  setSelectedTranscript: (transcript: Transcript | null) => {
+    set({ selected: transcript });
   },
 }));
 

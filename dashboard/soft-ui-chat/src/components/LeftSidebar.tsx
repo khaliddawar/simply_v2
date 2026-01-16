@@ -8,22 +8,21 @@ import {
   ChevronRight,
   ChevronDown,
   Clock,
-  PlayCircle,
   Plus,
   Mic,
+  Youtube,
+  AudioLines,
 } from "lucide-react";
-import { useTranscripts, useMoveTranscript, useDeleteTranscript } from "@/hooks/useTranscripts";
-import { usePodcasts, useMovePodcast, useDeletePodcast } from "@/hooks/usePodcasts";
+import { useLibrary, useMoveTranscript, useDeleteTranscript } from "@/hooks/useLibrary";
 import { useGroups, useCreateGroup, useUpdateGroup, useDeleteGroup } from "@/hooks/useGroups";
 import { useSelectedTranscript } from "@/hooks/useSelectedTranscript";
-import { useSelectedPodcast } from "@/hooks/useSelectedPodcast";
 import { useChatStore } from "@/hooks/useChat";
 import { CreateGroupDialog } from "./CreateGroupDialog";
 import { TranscriptContextMenu } from "./TranscriptContextMenu";
 import { GroupContextMenu } from "./GroupContextMenu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import type { Video, Podcast } from "@/types/api";
+import type { Transcript, SourceType } from "@/types/api";
 
 /**
  * Helper to convert Tailwind color class to hex for API
@@ -63,26 +62,73 @@ function getColorClass(hexColor: string): string {
 }
 
 /**
- * Convert duration in seconds to MM:SS format
+ * Format duration for display based on transcript source type and metadata
+ * YouTube videos use seconds, meetings use minutes
  */
-function formatDuration(seconds: number | null | undefined): string {
-  if (!seconds) return "0:00";
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  return `${mins}:${secs.toString().padStart(2, "0")}`;
+function formatTranscriptDuration(transcript: Transcript): string | null {
+  const meta = transcript.metadata;
+
+  // YouTube videos have duration in seconds
+  if (transcript.source_type === "youtube" && "duration_seconds" in meta) {
+    const s = meta.duration_seconds;
+    if (!s) return null;
+    return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
+  }
+
+  // Meetings (Fireflies, Zoom) have duration in minutes
+  if (
+    ["fireflies", "zoom"].includes(transcript.source_type) &&
+    "duration_minutes" in meta
+  ) {
+    const mins = meta.duration_minutes;
+    if (!mins) return null;
+    return `${mins} min`;
+  }
+
+  return null;
 }
 
 /**
- * Convert duration in minutes to HH:MM format
+ * Get the appropriate icon for a transcript based on its source type
  */
-function formatDurationMinutes(minutes: number | null | undefined): string {
-  if (!minutes) return "0:00";
-  const hours = Math.floor(minutes / 60);
-  const mins = minutes % 60;
-  if (hours > 0) {
-    return `${hours}h ${mins}m`;
+function getSourceIcon(sourceType: SourceType, isSelected: boolean): React.ReactNode {
+  const baseClass = isSelected
+    ? "text-foreground"
+    : "text-muted-foreground group-hover:text-foreground";
+
+  switch (sourceType) {
+    case "youtube":
+      return <Youtube className={`w-3.5 h-3.5 ${baseClass}`} />;
+    case "fireflies":
+    case "zoom":
+      return <Mic className={`w-3.5 h-3.5 ${baseClass}`} />;
+    case "pdf":
+      return <FileText className={`w-3.5 h-3.5 ${baseClass}`} />;
+    case "audio":
+      return <AudioLines className={`w-3.5 h-3.5 ${baseClass}`} />;
+    default:
+      return <FileText className={`w-3.5 h-3.5 ${baseClass}`} />;
   }
-  return `${mins}m`;
+}
+
+/**
+ * Get the subtitle text for a transcript (channel name, subject, etc.)
+ */
+function getTranscriptSubtitle(transcript: Transcript): string {
+  const meta = transcript.metadata;
+
+  if (transcript.source_type === "youtube" && "channel_name" in meta) {
+    return meta.channel_name || "Unknown";
+  }
+
+  if (
+    ["fireflies", "zoom"].includes(transcript.source_type) &&
+    "subject" in meta
+  ) {
+    return meta.subject || transcript.source_type;
+  }
+
+  return transcript.source_type;
 }
 
 /**
@@ -114,83 +160,67 @@ function SidebarSkeleton() {
 export function LeftSidebar() {
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
   const [recentExpanded, setRecentExpanded] = useState(true);
-  const [podcastsExpanded, setPodcastsExpanded] = useState(true);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
 
-  // Fetch data from API using React Query hooks
-  // useTranscripts returns VideoListResponse with videos array
-  const { data: transcriptsData, isLoading: transcriptsLoading, error: transcriptsError } = useTranscripts();
-  const { data: podcastsData, isLoading: podcastsLoading, error: podcastsError } = usePodcasts();
+  // Fetch ungrouped transcripts for "Recent" section using unified API
+  const {
+    data: recentData,
+    isLoading: recentLoading,
+    error: recentError,
+  } = useLibrary({ ungroupedOnly: true });
+
+  // Fetch groups for sidebar navigation
   const { data: groups = [], isLoading: groupsLoading, error: groupsError } = useGroups();
 
-  // Selected transcript state management
+  // Selected transcript state management (unified - no separate podcast selection)
   const { selectedTranscript, setSelectedTranscript } = useSelectedTranscript();
 
-  // Selected podcast state management
-  const { selectedPodcast, setSelectedPodcast } = useSelectedPodcast();
-
-  // Chat video filter - sync video selection with RAG context
+  // Chat video filter - sync transcript selection with RAG context
   const setVideoFilter = useChatStore((state) => state.setVideoFilter);
 
-  // Extract videos array from response, default to empty array
-  const videos = transcriptsData?.videos ?? [];
-
-  // Extract podcasts array from response, default to empty array
-  const podcasts = podcastsData?.podcasts ?? [];
+  // Extract transcripts array from response, default to empty array
+  const recentTranscripts = recentData?.transcripts ?? [];
+  const totalTranscripts = recentData?.total ?? 0;
 
   // Auto-select the first (most recent) transcript when data loads
-  // Only auto-select if no transcript AND no podcast is currently selected
   useEffect(() => {
-    if (!transcriptsLoading && videos.length > 0 && !selectedTranscript && !selectedPodcast) {
-      // Videos are sorted by most recent first from API
-      setSelectedTranscript(videos[0]);
-      setVideoFilter(videos[0].id);  // Also set video context for RAG chat
+    if (!recentLoading && recentTranscripts.length > 0 && !selectedTranscript) {
+      // Transcripts are sorted by most recent first from API
+      setSelectedTranscript(recentTranscripts[0] as any); // Cast for now until Video type is updated
+      setVideoFilter(recentTranscripts[0].id);  // Set transcript context for RAG chat
     }
-  }, [transcriptsLoading, videos, selectedTranscript, selectedPodcast, setSelectedTranscript, setVideoFilter]);
+  }, [recentLoading, recentTranscripts, selectedTranscript, setSelectedTranscript, setVideoFilter]);
 
-  // Handle transcript selection
-  const handleSelectTranscript = (video: Video) => {
-    setSelectedTranscript(video);
-    setSelectedPodcast(null);  // Clear podcast selection when selecting a video
-    setVideoFilter(video.id);  // Also set video context for RAG chat
+  // Handle transcript selection (unified - works for any source type)
+  const handleSelectTranscript = (transcript: Transcript) => {
+    setSelectedTranscript(transcript as any); // Cast for now until Video type is updated
+    setVideoFilter(transcript.id);  // Set transcript context for RAG chat
   };
 
-  // Handle podcast selection
-  const handleSelectPodcast = (podcast: Podcast) => {
-    setSelectedPodcast(podcast);
-    setSelectedTranscript(null);  // Clear transcript selection when selecting a podcast
-    setVideoFilter(`podcast_${podcast.id}`);  // Set podcast context for RAG chat (matches Pinecone video_id)
-  };
-
-  // Check if a video is currently selected
-  const isSelected = (videoId: string): boolean => {
-    return selectedTranscript?.id === videoId;
-  };
-
-  // Check if a podcast is currently selected
-  const isPodcastSelected = (podcastId: string): boolean => {
-    return selectedPodcast?.id === podcastId;
+  // Check if a transcript is currently selected
+  const isSelected = (transcriptId: string): boolean => {
+    return selectedTranscript?.id === transcriptId;
   };
 
   // Mutation hooks for data modifications
   const moveTranscriptMutation = useMoveTranscript();
   const deleteTranscriptMutation = useDeleteTranscript();
-  const movePodcastMutation = useMovePodcast();
-  const deletePodcastMutation = useDeletePodcast();
   const createGroupMutation = useCreateGroup();
   const updateGroupMutation = useUpdateGroup();
   const deleteGroupMutation = useDeleteGroup();
 
   // Combined loading state
-  const isLoading = transcriptsLoading || groupsLoading || podcastsLoading;
-  const hasError = transcriptsError || groupsError || podcastsError;
+  const isLoading = recentLoading || groupsLoading;
+  const hasError = recentError || groupsError;
 
-  // Get ungrouped (recent) videos
-  const recentVideos = videos.filter((v) => !v.group_id);
-
-  // Get videos for a specific group
-  const getGroupVideos = (groupId: string) =>
-    videos.filter((v) => v.group_id === groupId);
+  // Get transcripts for a specific group
+  // Note: This will need to be updated to use useLibrary({ groupId }) for each expanded group
+  // For now, we filter from all transcripts client-side (will be refactored in a follow-up)
+  const getGroupTranscripts = (groupId: string): Transcript[] => {
+    // TODO: Replace with per-group useLibrary queries for better performance
+    // For now, return empty array - groups show count from API
+    return [];
+  };
 
   const toggleGroup = (groupId: string) => {
     setExpandedGroups((prev) =>
@@ -221,7 +251,7 @@ export function LeftSidebar() {
     const targetGroupId = groupId === null ? null : String(groupId);
 
     moveTranscriptMutation.mutate(
-      { id, groupId: targetGroupId },
+      { transcriptId: id, groupId: targetGroupId },
       {
         onSuccess: () => {
           const groupName = targetGroupId
@@ -237,8 +267,8 @@ export function LeftSidebar() {
   };
 
   const handleDeleteTranscript = (transcriptId: string | number) => {
-    const videoId = String(transcriptId);
-    deleteTranscriptMutation.mutate(videoId, {
+    const id = String(transcriptId);
+    deleteTranscriptMutation.mutate(id, {
       onSuccess: () => {
         toast.success("Transcript deleted");
       },
@@ -309,7 +339,7 @@ export function LeftSidebar() {
           <div className="w-3 h-3 rounded-full bg-green-400" />
         </div>
         <span className="text-xs text-muted-foreground ml-2">
-          {isLoading ? "Loading..." : `${videos.length} videos · ${podcasts.length} podcasts`}
+          {isLoading ? "Loading..." : `${totalTranscripts} transcripts`}
         </span>
       </div>
 
@@ -362,7 +392,7 @@ export function LeftSidebar() {
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-muted-foreground">
-                    {recentVideos.length}
+                    {recentTranscripts.length}
                   </span>
                   {recentExpanded ? (
                     <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
@@ -373,18 +403,18 @@ export function LeftSidebar() {
               </button>
               {recentExpanded && (
                 <div className="ml-4 mt-1 space-y-0.5">
-                  {recentVideos.length === 0 ? (
+                  {recentTranscripts.length === 0 ? (
                     <p className="text-xxs text-muted-foreground px-3 py-2 italic">
                       No transcripts
                     </p>
                   ) : (
-                    recentVideos.map((video) => (
+                    recentTranscripts.map((transcript) => (
                       <TranscriptContextMenu
-                        key={video.id}
+                        key={transcript.id}
                         transcript={{
-                          id: video.id,
-                          title: video.title,
-                          groupId: video.group_id,
+                          id: transcript.id,
+                          title: transcript.title,
+                          groupId: transcript.group_id,
                         }}
                         groups={groups.map((g) => ({
                           id: g.id,
@@ -395,22 +425,19 @@ export function LeftSidebar() {
                         onDelete={handleDeleteTranscript}
                       >
                         <div
-                          onClick={() => handleSelectTranscript(video)}
+                          onClick={() => handleSelectTranscript(transcript)}
                           className={`sidebar-item py-1.5 group cursor-pointer ${
-                            isSelected(video.id)
+                            isSelected(transcript.id)
                               ? "bg-accent/50 text-accent-foreground"
                               : ""
                           }`}
                         >
-                          <FileText className={`w-3.5 h-3.5 ${
-                            isSelected(video.id)
-                              ? "text-foreground"
-                              : "text-muted-foreground group-hover:text-foreground"
-                          }`} />
+                          {getSourceIcon(transcript.source_type, isSelected(transcript.id))}
                           <div className="flex-1 min-w-0">
-                            <p className="text-sm truncate">{video.title}</p>
+                            <p className="text-sm truncate">{transcript.title}</p>
                             <p className="text-xxs text-muted-foreground truncate">
-                              {video.channel_name || "Unknown"} · {formatDuration(video.duration_seconds)}
+                              {getTranscriptSubtitle(transcript)}
+                              {formatTranscriptDuration(transcript) && ` · ${formatTranscriptDuration(transcript)}`}
                             </p>
                           </div>
                         </div>
@@ -424,9 +451,9 @@ export function LeftSidebar() {
             {/* Groups */}
             <div className="space-y-1">
               {groups.map((group) => {
-                const groupVideos = getGroupVideos(group.id);
                 const isExpanded = expandedGroups.includes(group.id);
                 const colorClass = getColorClass(group.color);
+                const groupTranscripts = getGroupTranscripts(group.id);
 
                 return (
                   <div key={group.id}>
@@ -458,7 +485,7 @@ export function LeftSidebar() {
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-muted-foreground">
-                            {groupVideos.length}
+                            {group.video_count}
                           </span>
                           {isExpanded ? (
                             <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
@@ -470,13 +497,13 @@ export function LeftSidebar() {
                     </GroupContextMenu>
                     {isExpanded && (
                       <div className="ml-6 mt-1 space-y-0.5">
-                        {groupVideos.map((video) => (
+                        {groupTranscripts.map((transcript) => (
                           <TranscriptContextMenu
-                            key={video.id}
+                            key={transcript.id}
                             transcript={{
-                              id: video.id,
-                              title: video.title,
-                              groupId: video.group_id,
+                              id: transcript.id,
+                              title: transcript.title,
+                              groupId: transcript.group_id,
                             }}
                             groups={groups.map((g) => ({
                               id: g.id,
@@ -487,28 +514,25 @@ export function LeftSidebar() {
                             onDelete={handleDeleteTranscript}
                           >
                             <div
-                              onClick={() => handleSelectTranscript(video)}
+                              onClick={() => handleSelectTranscript(transcript)}
                               className={`sidebar-item py-1.5 group cursor-pointer ${
-                                isSelected(video.id)
+                                isSelected(transcript.id)
                                   ? "bg-accent/50 text-accent-foreground"
                                   : ""
                               }`}
                             >
-                              <PlayCircle className={`w-3.5 h-3.5 ${
-                                isSelected(video.id)
-                                  ? "text-foreground"
-                                  : "text-muted-foreground group-hover:text-foreground"
-                              }`} />
+                              {getSourceIcon(transcript.source_type, isSelected(transcript.id))}
                               <div className="flex-1 min-w-0">
-                                <p className="text-sm truncate">{video.title}</p>
+                                <p className="text-sm truncate">{transcript.title}</p>
                                 <p className="text-xxs text-muted-foreground">
-                                  {formatDuration(video.duration_seconds)}
+                                  {getTranscriptSubtitle(transcript)}
+                                  {formatTranscriptDuration(transcript) && ` · ${formatTranscriptDuration(transcript)}`}
                                 </p>
                               </div>
                             </div>
                           </TranscriptContextMenu>
                         ))}
-                        {groupVideos.length === 0 && (
+                        {groupTranscripts.length === 0 && (
                           <p className="text-xxs text-muted-foreground px-3 py-2 italic">
                             No transcripts
                           </p>
@@ -518,62 +542,6 @@ export function LeftSidebar() {
                   </div>
                 );
               })}
-            </div>
-
-            {/* Podcasts Section */}
-            <div className="mb-2 mt-4">
-              <button
-                onClick={() => setPodcastsExpanded(!podcastsExpanded)}
-                className="sidebar-item w-full justify-between py-1.5"
-              >
-                <div className="flex items-center gap-3">
-                  <Mic className="w-4 h-4 text-purple-500" />
-                  <span className="text-sm font-medium">Podcasts</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground">
-                    {podcasts.length}
-                  </span>
-                  {podcastsExpanded ? (
-                    <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
-                  ) : (
-                    <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
-                  )}
-                </div>
-              </button>
-              {podcastsExpanded && (
-                <div className="ml-4 mt-1 space-y-0.5">
-                  {podcasts.length === 0 ? (
-                    <p className="text-xxs text-muted-foreground px-3 py-2 italic">
-                      No podcasts yet
-                    </p>
-                  ) : (
-                    podcasts.map((podcast) => (
-                      <div
-                        key={podcast.id}
-                        onClick={() => handleSelectPodcast(podcast)}
-                        className={`sidebar-item py-1.5 group cursor-pointer ${
-                          isPodcastSelected(podcast.id)
-                            ? "bg-accent/50 text-accent-foreground"
-                            : ""
-                        }`}
-                      >
-                        <Mic className={`w-3.5 h-3.5 ${
-                          isPodcastSelected(podcast.id)
-                            ? "text-foreground"
-                            : "text-muted-foreground group-hover:text-foreground"
-                        }`} />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm truncate">{podcast.title}</p>
-                          <p className="text-xxs text-muted-foreground truncate">
-                            {podcast.source} · {formatDurationMinutes(podcast.duration_minutes)}
-                          </p>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              )}
             </div>
 
             {/* New Group Button */}
