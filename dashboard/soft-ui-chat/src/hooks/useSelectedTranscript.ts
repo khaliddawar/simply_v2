@@ -32,35 +32,24 @@ interface SelectedTranscriptState {
 // Selected Transcript Store Implementation
 // ============================================
 
-export const useSelectedTranscript = create<SelectedTranscriptState>((set, get) => ({
-  // Initial state
+export const useSelectedTranscript = create<SelectedTranscriptState>((set) => ({
+  // Initial state - both properties kept in sync
   selected: null,
+  selectedTranscript: null,  // Actual state property, not a getter
 
   /**
    * Set the currently selected transcript (new API)
    * @param transcript - The transcript to select, or null to clear selection
    */
   setSelected: (transcript: Transcript | null) => {
-    set({ selected: transcript });
+    set({ selected: transcript, selectedTranscript: transcript });
   },
 
   /**
    * Clear the current selection
    */
   clearSelection: () => {
-    set({ selected: null });
-  },
-
-  // ============================================
-  // Backward Compatibility Aliases
-  // ============================================
-
-  /**
-   * Alias for `selected` - for backward compatibility
-   * @deprecated Use `selected` instead
-   */
-  get selectedTranscript() {
-    return get().selected;
+    set({ selected: null, selectedTranscript: null });
   },
 
   /**
@@ -69,7 +58,7 @@ export const useSelectedTranscript = create<SelectedTranscriptState>((set, get) 
    * @param transcript - The transcript to select, or null to clear selection
    */
   setSelectedTranscript: (transcript: Transcript | null) => {
-    set({ selected: transcript });
+    set({ selected: transcript, selectedTranscript: transcript });
   },
 }));
 
