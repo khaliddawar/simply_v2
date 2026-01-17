@@ -4,11 +4,14 @@ Authentication Routes
 Supports both legacy authentication (email/password, Google OAuth)
 and Authorizer authentication (JWKS-based RS256 token validation).
 """
+import logging
 from fastapi import APIRouter, HTTPException, Depends, Header, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import RedirectResponse
 from typing import Optional
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 from app.models.user import (
     UserCreate, UserLogin, UserResponse, TokenResponse,
@@ -650,8 +653,18 @@ async def exchange_authorizer_token(request: AuthorizerTokenRequest):
     given_name = payload.get("given_name")
     family_name = payload.get("family_name")
 
+    # If email is missing from token, fetch from userinfo endpoint
+    if not email and authorizer_user_id:
+        logger.info(f"Email not in token, fetching from /userinfo for user: {authorizer_user_id}")
+        userinfo = await authorizer_service.fetch_userinfo(request.access_token)
+        if userinfo:
+            email = userinfo.get("email")
+            given_name = userinfo.get("given_name") or given_name
+            family_name = userinfo.get("family_name") or family_name
+            logger.info(f"Got email from userinfo: {email}")
+
     if not authorizer_user_id or not email:
-        raise HTTPException(status_code=401, detail="Invalid token claims: missing sub or email")
+        raise HTTPException(status_code=401, detail="Invalid token claims: missing sub or email (userinfo fetch also failed)")
 
     # Get or create TubeVibe user
     user = await authorizer_service.get_or_create_tubevibe_user(
