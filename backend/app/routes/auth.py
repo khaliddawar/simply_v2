@@ -1467,16 +1467,14 @@ async def debug_validate_token(request: AuthorizerTokenRequest):
     # Try full verification with detailed error capture
     authorizer_service = get_authorizer_service()
 
-    # First test JWKS fetching
+    # First test JWKS fetching (using the service's method that handles missing kid)
     try:
-        from jwt import PyJWKClient
-        jwks_url = f"{settings.authorizer_url.rstrip('/')}/.well-known/jwks.json"
-        jwks_client = PyJWKClient(jwks_url)
-        signing_key = jwks_client.get_signing_key_from_jwt(request.access_token)
+        signing_key = authorizer_service._get_signing_key_from_jwks(request.access_token)
         result["jwks_fetch"] = {
             "status": "SUCCESS",
-            "key_id": signing_key.key_id,
-            "algorithm": getattr(signing_key, '_algorithm', 'RS256')
+            "key_id": getattr(signing_key, 'key_id', 'unknown'),
+            "algorithm": getattr(signing_key, '_algorithm', 'RS256'),
+            "note": "Using fallback for tokens without kid in header"
         }
 
         # Now try actual verification
