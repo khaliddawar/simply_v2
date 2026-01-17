@@ -1464,18 +1464,62 @@ async def debug_validate_token(request: AuthorizerTokenRequest):
     except Exception as e:
         result["decode_error"] = str(e)
 
-    # Try full verification
+    # Try full verification with detailed error capture
     authorizer_service = get_authorizer_service()
-    payload = authorizer_service.verify_token(request.access_token)
 
-    if payload:
-        result["verification"] = "SUCCESS"
-        result["verified_claims"] = {
-            "sub": payload.get("sub"),
-            "email": payload.get("email")
+    # First test JWKS fetching
+    try:
+        from jwt import PyJWKClient
+        jwks_url = f"{settings.authorizer_url.rstrip('/')}/.well-known/jwks.json"
+        jwks_client = PyJWKClient(jwks_url)
+        signing_key = jwks_client.get_signing_key_from_jwt(request.access_token)
+        result["jwks_fetch"] = {
+            "status": "SUCCESS",
+            "key_id": signing_key.key_id,
+            "algorithm": getattr(signing_key, '_algorithm', 'RS256')
         }
-    else:
+
+        # Now try actual verification
+        expected_issuer = settings.authorizer_url.rstrip('/')
+        try:
+            verified_payload = jwt.decode(
+                request.access_token,
+                signing_key.key,
+                algorithms=["RS256"],
+                options={
+                    "verify_exp": True,
+                    "verify_aud": False,
+                    "verify_iss": True
+                },
+                issuer=expected_issuer
+            )
+            result["verification"] = "SUCCESS"
+            result["verified_claims"] = {
+                "sub": verified_payload.get("sub"),
+                "email": verified_payload.get("email")
+            }
+        except jwt.ExpiredSignatureError as e:
+            result["verification"] = "FAILED"
+            result["verification_error"] = f"ExpiredSignatureError: {str(e)}"
+        except jwt.InvalidIssuerError as e:
+            result["verification"] = "FAILED"
+            result["verification_error"] = f"InvalidIssuerError: {str(e)}"
+        except jwt.InvalidSignatureError as e:
+            result["verification"] = "FAILED"
+            result["verification_error"] = f"InvalidSignatureError: {str(e)}"
+        except jwt.DecodeError as e:
+            result["verification"] = "FAILED"
+            result["verification_error"] = f"DecodeError: {str(e)}"
+        except Exception as e:
+            result["verification"] = "FAILED"
+            result["verification_error"] = f"{type(e).__name__}: {str(e)}"
+
+    except Exception as e:
+        result["jwks_fetch"] = {
+            "status": "FAILED",
+            "error": f"{type(e).__name__}: {str(e)}"
+        }
         result["verification"] = "FAILED"
-        result["verification_note"] = "Check Railway logs for detailed error message"
+        result["verification_error"] = "JWKS fetch failed - cannot verify signature"
 
     return result
