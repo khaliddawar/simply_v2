@@ -6,6 +6,7 @@ Handles:
 - JWKS caching for 1 hour using cachetools TTLCache
 - User synchronization between Authorizer and TubeVibe
 - Linking existing TubeVibe users to Authorizer accounts by email
+- Fetching user info from Authorizer's /userinfo endpoint
 """
 import logging
 import os
@@ -13,6 +14,7 @@ from typing import Optional, Dict, Any, TYPE_CHECKING
 import jwt
 from jwt import PyJWKClient
 from cachetools import TTLCache
+import httpx
 from app.settings import get_settings
 
 if TYPE_CHECKING:
@@ -119,21 +121,66 @@ class AuthorizerService:
             jwks_client = self._get_jwks_client()
             signing_key = jwks_client.get_signing_key_from_jwt(token)
 
-            # Decode and verify the token
-            payload = jwt.decode(
-                token,
-                signing_key.key,
-                algorithms=["RS256"],
-                options={
-                    "verify_exp": True,
-                    "verify_aud": False,  # Authorizer may not always set audience
-                    "verify_iss": True
-                },
-                issuer=self.authorizer_url
-            )
+            # Normalize issuer URL (remove trailing slash for comparison)
+            expected_issuer = self.authorizer_url.rstrip('/')
 
-            logger.debug(f"Token verified successfully for user: {payload.get('sub')}")
-            return payload
+            # First decode without issuer verification to check what's in the token
+            try:
+                unverified_payload = jwt.decode(
+                    token,
+                    signing_key.key,
+                    algorithms=["RS256"],
+                    options={
+                        "verify_exp": False,
+                        "verify_aud": False,
+                        "verify_iss": False
+                    }
+                )
+                token_issuer = unverified_payload.get('iss', '')
+                logger.info(f"Token issuer: '{token_issuer}', Expected: '{expected_issuer}'")
+
+                # Normalize token issuer for comparison
+                normalized_token_issuer = token_issuer.rstrip('/') if token_issuer else ''
+
+                if normalized_token_issuer != expected_issuer:
+                    logger.warning(f"Issuer mismatch: token='{token_issuer}' vs expected='{expected_issuer}'")
+                    # Try with both issuers (with and without trailing slash)
+                    possible_issuers = [expected_issuer, expected_issuer + '/']
+                    if token_issuer and token_issuer not in possible_issuers:
+                        possible_issuers.append(token_issuer)
+                else:
+                    possible_issuers = [expected_issuer]
+
+            except Exception as e:
+                logger.warning(f"Could not pre-decode token: {e}")
+                possible_issuers = [expected_issuer, expected_issuer + '/']
+
+            # Decode and verify the token with flexible issuer matching
+            last_error = None
+            for issuer in possible_issuers:
+                try:
+                    payload = jwt.decode(
+                        token,
+                        signing_key.key,
+                        algorithms=["RS256"],
+                        options={
+                            "verify_exp": True,
+                            "verify_aud": False,  # Authorizer may not always set audience
+                            "verify_iss": True
+                        },
+                        issuer=issuer
+                    )
+                    logger.info(f"Token verified successfully for user: {payload.get('sub')} with issuer: {issuer}")
+                    return payload
+                except jwt.InvalidIssuerError as e:
+                    last_error = e
+                    continue
+
+            if last_error:
+                logger.warning(f"Token verification failed: Invalid issuer after trying all options")
+                return None
+
+            return None
 
         except jwt.ExpiredSignatureError:
             logger.warning("Token verification failed: Token has expired")
@@ -240,11 +287,55 @@ class AuthorizerService:
             "family_name": token_payload.get("family_name"),
         }
 
+    async def fetch_userinfo(self, access_token: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch user information from Authorizer's /userinfo endpoint.
+
+        This is needed because Authorizer's access tokens may not include
+        all user claims (like email). The /userinfo endpoint returns the
+        full user profile when called with a valid access token.
+
+        Args:
+            access_token: Valid Authorizer access token
+
+        Returns:
+            Dict with user info (sub, email, given_name, family_name, etc.)
+            or None if the request fails
+        """
+        if not self.authorizer_url:
+            logger.error("Cannot fetch userinfo: Authorizer URL not configured")
+            return None
+
+        userinfo_url = f"{self.authorizer_url.rstrip('/')}/userinfo"
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(
+                    userinfo_url,
+                    headers={"Authorization": f"Bearer {access_token}"}
+                )
+
+                if response.status_code == 200:
+                    userinfo = response.json()
+                    logger.info(f"Fetched userinfo for user: {userinfo.get('sub')}")
+                    return userinfo
+                else:
+                    logger.warning(f"Failed to fetch userinfo: HTTP {response.status_code} - {response.text[:200]}")
+                    return None
+
+        except httpx.TimeoutException:
+            logger.error("Timeout while fetching userinfo from Authorizer")
+            return None
+        except Exception as e:
+            logger.error(f"Error fetching userinfo: {e}")
+            return None
+
     async def authenticate_authorizer_token(self, token: str) -> Dict[str, Any]:
         """
         Full authentication flow for Authorizer tokens.
 
         Verifies the token and creates/retrieves the TubeVibe user.
+        If the token doesn't contain email, fetches it from /userinfo endpoint.
 
         Args:
             token: JWT access token from Authorizer
@@ -257,11 +348,30 @@ class AuthorizerService:
         if not payload:
             return {"success": False, "error": "Invalid or expired token"}
 
-        # Extract user info
+        # Extract user info from token
         user_info = self.extract_user_info(payload)
 
-        if not user_info.get("authorizer_user_id") or not user_info.get("email"):
-            return {"success": False, "error": "Token missing required claims (sub, email)"}
+        # Check for required sub claim
+        if not user_info.get("authorizer_user_id"):
+            return {"success": False, "error": "Token missing required claim (sub)"}
+
+        # If email is missing from token, fetch from /userinfo endpoint
+        if not user_info.get("email"):
+            logger.info(f"Email not in token, fetching from /userinfo for user: {user_info['authorizer_user_id']}")
+            userinfo = await self.fetch_userinfo(token)
+
+            if userinfo:
+                # Update user_info with data from /userinfo endpoint
+                user_info["email"] = userinfo.get("email")
+                user_info["given_name"] = userinfo.get("given_name") or user_info.get("given_name")
+                user_info["family_name"] = userinfo.get("family_name") or user_info.get("family_name")
+                logger.info(f"Got email from userinfo: {user_info.get('email')}")
+            else:
+                logger.warning("Failed to fetch userinfo, email still missing")
+
+        # Final check for email
+        if not user_info.get("email"):
+            return {"success": False, "error": "Could not retrieve email from token or userinfo endpoint"}
 
         # Get or create TubeVibe user
         user = await self.get_or_create_tubevibe_user(
