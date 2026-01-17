@@ -1335,3 +1335,134 @@ async def merge_duplicate_users(request: MergeUsersActionRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to merge users: {str(e)}")
+
+
+# =============================================================================
+# Diagnostic Endpoint - Test Authorizer Configuration
+# =============================================================================
+
+@router.get("/debug/authorizer-status")
+async def debug_authorizer_status():
+    """
+    Diagnostic endpoint to test Authorizer configuration and JWKS accessibility.
+    This helps debug "Invalid Authorizer token" errors.
+
+    Returns configuration status and JWKS test results.
+    """
+    import requests
+    settings = get_settings()
+
+    result = {
+        "authorizer_configured": bool(settings.authorizer_url),
+        "authorizer_url": settings.authorizer_url if settings.authorizer_url else "NOT SET",
+        "jwks_test": None,
+        "jwks_keys": []
+    }
+
+    if not settings.authorizer_url:
+        result["error"] = "AUTHORIZER_URL environment variable not set"
+        return result
+
+    # Test JWKS endpoint
+    jwks_url = f"{settings.authorizer_url.rstrip('/')}/.well-known/jwks.json"
+    result["jwks_url"] = jwks_url
+
+    try:
+        response = requests.get(jwks_url, timeout=10)
+        result["jwks_test"] = {
+            "status_code": response.status_code,
+            "accessible": response.ok
+        }
+
+        if response.ok:
+            data = response.json()
+            keys = data.get("keys", [])
+            result["jwks_keys"] = [
+                {"kid": k.get("kid"), "alg": k.get("alg"), "kty": k.get("kty")}
+                for k in keys
+            ]
+            result["message"] = f"JWKS accessible with {len(keys)} keys"
+        else:
+            result["error"] = f"JWKS returned {response.status_code}: {response.text[:200]}"
+
+    except Exception as e:
+        result["jwks_test"] = {"error": str(e), "accessible": False}
+        result["error"] = f"Failed to access JWKS: {str(e)}"
+
+    return result
+
+
+@router.post("/debug/validate-token")
+async def debug_validate_token(request: AuthorizerTokenRequest):
+    """
+    Diagnostic endpoint to test token validation and show detailed results.
+    This helps debug "Invalid Authorizer token" errors.
+
+    Returns detailed validation results including issuer comparison.
+    """
+    import jwt
+    settings = get_settings()
+
+    result = {
+        "token_provided": bool(request.access_token),
+        "authorizer_url": settings.authorizer_url
+    }
+
+    if not settings.authorizer_url:
+        result["error"] = "AUTHORIZER_URL not configured"
+        return result
+
+    if not request.access_token:
+        result["error"] = "No token provided"
+        return result
+
+    # Decode token without verification to see claims
+    try:
+        unverified = jwt.decode(request.access_token, options={"verify_signature": False})
+        result["token_claims"] = {
+            "sub": unverified.get("sub"),
+            "email": unverified.get("email"),
+            "iss": unverified.get("iss"),
+            "exp": unverified.get("exp"),
+            "iat": unverified.get("iat")
+        }
+
+        # Check issuer match
+        expected_issuer = settings.authorizer_url.rstrip('/')
+        token_issuer = unverified.get("iss", "").rstrip('/')
+        result["issuer_comparison"] = {
+            "expected": expected_issuer,
+            "token_has": token_issuer,
+            "match": expected_issuer == token_issuer
+        }
+
+        # Check expiration
+        import time
+        exp = unverified.get("exp")
+        if exp:
+            now = int(time.time())
+            result["expiration"] = {
+                "exp_timestamp": exp,
+                "current_timestamp": now,
+                "is_expired": now > exp,
+                "seconds_until_expiry": exp - now if exp > now else f"expired {now - exp}s ago"
+            }
+
+    except Exception as e:
+        result["decode_error"] = str(e)
+
+    # Try full verification
+    authorizer_service = get_authorizer_service()
+    payload = authorizer_service.verify_token(request.access_token)
+
+    if payload:
+        result["verification"] = "SUCCESS"
+        result["verified_claims"] = {
+            "sub": payload.get("sub"),
+            "email": payload.get("email")
+        }
+    else:
+        result["verification"] = "FAILED"
+        result["verification_note"] = "Check Railway logs for detailed error message"
+
+    return result
