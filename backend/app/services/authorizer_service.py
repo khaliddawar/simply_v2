@@ -98,12 +98,46 @@ class AuthorizerService:
 
         return self._jwks_client
 
+    def _get_signing_key_from_jwks(self, token: str):
+        """
+        Get signing key from JWKS, handling tokens without kid.
+
+        Authorizer tokens may not include 'kid' in the header.
+        If get_signing_key_from_jwt fails, fetch JWKS manually and use first key.
+        """
+        jwks_client = self._get_jwks_client()
+
+        try:
+            # Try normal path - works if token has 'kid' in header
+            return jwks_client.get_signing_key_from_jwt(token)
+        except jwt.PyJWKClientError as e:
+            # Token might not have 'kid' - fetch first key from JWKS
+            if "Unable to find a signing key" in str(e):
+                logger.info("Token has no 'kid', fetching first key from JWKS")
+                import requests
+                jwks_url = f"{self.authorizer_url.rstrip('/')}/.well-known/jwks.json"
+                response = requests.get(jwks_url, timeout=10)
+                response.raise_for_status()
+                jwks_data = response.json()
+
+                if jwks_data.get("keys"):
+                    # Use the first key
+                    from jwt import PyJWK
+                    first_key = jwks_data["keys"][0]
+                    logger.info(f"Using first JWKS key: kid={first_key.get('kid')}")
+                    return PyJWK.from_dict(first_key)
+                else:
+                    raise ValueError("No keys found in JWKS")
+            else:
+                raise
+
     def verify_token(self, token: str) -> Optional[Dict[str, Any]]:
         """
         Verify and decode an Authorizer JWT token using JWKS.
 
         Uses RS256 algorithm and validates against Authorizer's public keys.
         JWKS is cached for 1 hour to improve performance.
+        Handles tokens without 'kid' by using the first key from JWKS.
 
         Args:
             token: JWT access token from Authorizer
@@ -117,9 +151,8 @@ class AuthorizerService:
             return None
 
         try:
-            # Get signing key from JWKS
-            jwks_client = self._get_jwks_client()
-            signing_key = jwks_client.get_signing_key_from_jwt(token)
+            # Get signing key from JWKS (handles tokens without kid)
+            signing_key = self._get_signing_key_from_jwks(token)
 
             # Normalize issuer URL (remove trailing slash for comparison)
             expected_issuer = self.authorizer_url.rstrip('/')
