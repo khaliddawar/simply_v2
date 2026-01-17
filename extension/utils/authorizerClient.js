@@ -355,7 +355,7 @@ class AuthorizerClient {
             return {
                 success: true,
                 access_token: backendData.access_token || accessToken,
-                refresh_token: null,
+                refresh_token: backendData.refresh_token || backendData.access_token,  // Use backend's refresh_token
                 expires_in: backendData.expires_in || expiresIn,
                 user: backendData.user || googleUser,
                 provider: 'google'
@@ -498,6 +498,8 @@ class AuthorizerClient {
         this.log('REFRESH_TOKEN_START');
 
         try {
+            // Use Authorization header with refresh token
+            // Note: Cookie header can't be set manually in fetch (browser security)
             const query = `
                 mutation {
                     session(params: {}) {
@@ -519,23 +521,47 @@ class AuthorizerClient {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Cookie': `refresh_token=${refreshToken}`
+                    'Authorization': `Bearer ${refreshToken}`
                 },
-                body: JSON.stringify({ query }),
-                credentials: 'include'
+                body: JSON.stringify({ query })
             });
 
-            if (!response.ok) {
-                throw new Error(`Token refresh failed: ${response.status}`);
+            let sessionData = null;
+
+            if (response.ok) {
+                const result = await response.json();
+                if (!result.errors || result.errors.length === 0) {
+                    sessionData = result.data?.session;
+                }
             }
 
-            const result = await response.json();
+            // If GraphQL session mutation failed, try OAuth2 token endpoint
+            if (!sessionData) {
+                this.log('REFRESH_TOKEN_GRAPHQL_FAILED_TRYING_OAUTH');
 
-            if (result.errors && result.errors.length > 0) {
-                throw new Error(result.errors[0].message);
+                const oauthResponse = await fetch(`${this.AUTHORIZER_URL}/oauth/token`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: new URLSearchParams({
+                        grant_type: 'refresh_token',
+                        refresh_token: refreshToken
+                    })
+                });
+
+                if (oauthResponse.ok) {
+                    const oauthData = await oauthResponse.json();
+                    sessionData = {
+                        access_token: oauthData.access_token,
+                        refresh_token: oauthData.refresh_token || refreshToken,
+                        expires_in: oauthData.expires_in || 1800
+                    };
+                } else {
+                    const errorText = await oauthResponse.text();
+                    throw new Error(`OAuth token refresh failed: ${oauthResponse.status} - ${errorText}`);
+                }
             }
-
-            const sessionData = result.data.session;
 
             // Also exchange with TubeVibe backend
             const tubeVibeData = await this.exchangeForTubeVibeToken(sessionData);

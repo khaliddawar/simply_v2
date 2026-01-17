@@ -520,12 +520,15 @@ async def google_oauth_extension(request: GoogleUserDataRequest):
                 import logging
                 logging.getLogger(__name__).warning(f"Failed to send welcome email: {e}")
 
-        # Generate JWT token
+        # Generate JWT tokens
+        # access_token expires based on settings (default 7 days)
+        # refresh_token is the same token - refresh endpoint just validates and issues new token
         jwt_token = auth_service.create_access_token(user["id"])
         settings = get_settings()
 
         return TokenResponse(
             access_token=jwt_token,
+            refresh_token=jwt_token,  # Use same token for refresh - backend validates and issues new
             token_type="bearer",
             expires_in=settings.jwt_access_token_expire_minutes * 60,
             user=UserResponse(

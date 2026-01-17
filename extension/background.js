@@ -577,12 +577,14 @@ async function handleGoogleAuth() {
       }
 
       // Store tokens with auth_provider marker
+      // Use 'google' as auth_provider so refresh uses /api/auth/refresh (TubeVibe JWT)
+      // NOT Authorizer's refresh since we're using direct Google OAuth
       const storageData = {
         'access_token': result.access_token,
         'refresh_token': result.refresh_token,
         'user_info': result.user,
         'token_expires_at': Date.now() + (result.expires_in * 1000),
-        'auth_provider': 'authorizer'
+        'auth_provider': 'google'
       };
       await chrome.storage.local.set(storageData);
 
