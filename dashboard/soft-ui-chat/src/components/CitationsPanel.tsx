@@ -6,12 +6,12 @@
  * Also includes video actions when a specific video is selected.
  */
 import { useState } from 'react';
-import { BookOpen, Search, Filter, Sparkles, Mail, Loader2, ExternalLink } from 'lucide-react';
+import { BookOpen, Search, Filter, Sparkles, Mail, Loader2, ExternalLink, RefreshCw, CheckCircle, Users } from 'lucide-react';
 import { useChat, type Citation } from '@/hooks/useChat';
 import { useLibraryStats } from '@/hooks/useLibraryStats';
 import { useGroups } from '@/hooks/useGroups';
 import { useSelectedTranscript } from '@/hooks/useSelectedTranscript';
-import { useGenerateSummary, useEmailSummary } from '@/hooks/useTranscripts';
+import { useGenerateTranscriptSummary, useEmailTranscriptSummary } from '@/hooks/useLibrary';
 import { CitationCard } from './CitationCard';
 import { toast } from 'sonner';
 import {
@@ -34,8 +34,8 @@ export function CitationsPanel() {
   const { totalVideos } = useLibraryStats();
   const { data: groups } = useGroups();
   const { selectedTranscript, setSelectedTranscript } = useSelectedTranscript();
-  const generateSummary = useGenerateSummary();
-  const emailSummary = useEmailSummary();
+  const generateSummary = useGenerateTranscriptSummary();
+  const emailSummary = useEmailTranscriptSummary();
 
   // State for dialogs
   const [showSummaryDialog, setShowSummaryDialog] = useState(false);
@@ -59,12 +59,12 @@ export function CitationsPanel() {
     console.log('Select video:', videoId);
   };
 
-  const handleGenerateSummary = async () => {
+  const handleGenerateSummary = async (forceRegenerate = false) => {
     if (!selectedTranscript) return;
     try {
       const result = await generateSummary.mutateAsync({
-        videoId: selectedTranscript.id,
-        forceRegenerate: false,
+        transcriptId: selectedTranscript.id,
+        forceRegenerate,
       });
       if (result.success) {
         setSummary(result);
@@ -96,7 +96,7 @@ export function CitationsPanel() {
     const summaryHtml = formatSummaryHtml(summary);
     try {
       const result = await emailSummary.mutateAsync({
-        videoId: selectedTranscript.id,
+        transcriptId: selectedTranscript.id,
         request: {
           recipient_email: emailAddress,
           summary_html: summaryHtml,
@@ -198,7 +198,7 @@ export function CitationsPanel() {
         <div className="px-4 py-3 border-b border-border/50 space-y-2">
           <div className="flex gap-2">
             <button
-              onClick={handleGenerateSummary}
+              onClick={() => handleGenerateSummary(false)}
               disabled={generateSummary.isPending}
               className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2
                          bg-primary text-primary-foreground rounded-lg font-medium text-xs
@@ -269,19 +269,29 @@ export function CitationsPanel() {
             <DialogTitle className="flex items-center gap-2">
               <Sparkles className="w-5 h-5 text-primary" />
               Video Summary
+              {summary?.cached && (
+                <span className="ml-2 text-xs font-normal bg-accent text-muted-foreground px-2 py-0.5 rounded">
+                  Cached
+                </span>
+              )}
             </DialogTitle>
             <DialogDescription>{selectedTranscript?.title}</DialogDescription>
           </DialogHeader>
 
           {summary && (
-            <div className="space-y-4 py-4">
+            <div className="space-y-6 py-4">
+              {/* Executive Summary */}
               <div>
-                <h3 className="text-sm font-semibold text-foreground mb-2">Overview</h3>
+                <h3 className="text-sm font-semibold text-foreground mb-2 flex items-center gap-2">
+                  <CheckCircle className="w-4 h-4 text-green-500" />
+                  Overview
+                </h3>
                 <p className="text-sm text-muted-foreground leading-relaxed">
                   {summary.executive_summary}
                 </p>
               </div>
 
+              {/* Key Takeaways */}
               {summary.key_takeaways.length > 0 && (
                 <div>
                   <h3 className="text-sm font-semibold text-foreground mb-2">Key Takeaways</h3>
@@ -296,10 +306,46 @@ export function CitationsPanel() {
                 </div>
               )}
 
+              {/* Target Audience */}
               {summary.target_audience && (
-                <div className="p-3 bg-accent/50 rounded-lg">
-                  <span className="text-xs font-medium text-foreground">Who this is for: </span>
-                  <span className="text-sm text-muted-foreground">{summary.target_audience}</span>
+                <div className="flex items-start gap-2 p-3 bg-accent/50 rounded-lg">
+                  <Users className="w-4 h-4 text-muted-foreground mt-0.5" />
+                  <div>
+                    <span className="text-xs font-medium text-foreground">Who this is for:</span>
+                    <p className="text-sm text-muted-foreground">{summary.target_audience}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Sections - Detailed Breakdown */}
+              {summary.sections && summary.sections.length > 0 && (
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground mb-3">
+                    Detailed Breakdown ({summary.total_sections} sections)
+                  </h3>
+                  <div className="space-y-4">
+                    {summary.sections.map((section, i) => (
+                      <div key={i} className="border border-border/50 rounded-lg p-3">
+                        <div className="flex items-center justify-between mb-2">
+                          <h4 className="text-sm font-medium text-foreground">{section.title}</h4>
+                          <span className="text-xs text-muted-foreground bg-accent px-2 py-0.5 rounded">
+                            {section.timestamp}
+                          </span>
+                        </div>
+                        <p className="text-sm text-muted-foreground mb-2">{section.summary}</p>
+                        {section.key_points.length > 0 && (
+                          <ul className="space-y-1">
+                            {section.key_points.map((point, j) => (
+                              <li key={j} className="text-xs text-muted-foreground flex items-start gap-1.5">
+                                <span className="text-primary">–</span>
+                                {point}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -308,6 +354,17 @@ export function CitationsPanel() {
           <DialogFooter className="flex gap-2">
             <Button variant="outline" onClick={() => setShowSummaryDialog(false)}>
               Close
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowSummaryDialog(false);
+                handleGenerateSummary(true);
+              }}
+              disabled={generateSummary.isPending}
+            >
+              <RefreshCw className="w-4 h-4 mr-2" />
+              Regenerate
             </Button>
             <Button onClick={handleEmailSummary} disabled={emailSummary.isPending}>
               <Mail className="w-4 h-4 mr-2" />

@@ -393,7 +393,7 @@ async def move_transcript_to_group(
 @router.get("/{transcript_id}/summary", response_model=FullSummaryResponse)
 async def get_transcript_summary(
     transcript_id: str,
-    force: bool = Query(
+    force_regenerate: bool = Query(
         False,
         description="Force regeneration of summary even if cached version exists"
     ),
@@ -404,17 +404,17 @@ async def get_transcript_summary(
 
     Summary Caching:
     - Summaries are cached after first generation to avoid repeated LLM calls
-    - Use force=true to regenerate and update the cached summary
+    - Use force_regenerate=true to regenerate and update the cached summary
     - Cached summaries are returned instantly without any LLM calls
 
-    Generation Process (when not cached or force=true):
+    Generation Process (when not cached or force_regenerate=true):
     1. Detects topic sections in the transcript
     2. Applies Chain of Density summarization to each section
     3. Generates an executive summary with key takeaways
 
     Args:
         transcript_id: UUID of the transcript
-        force: If true, regenerate summary even if cached
+        force_regenerate: If true, regenerate summary even if cached
 
     Returns:
         FullSummaryResponse with structured summary
@@ -442,7 +442,7 @@ async def get_transcript_summary(
     result = await transcript_service.get_summary(
         user_id=user_id,
         transcript_id=transcript_id,
-        force_regenerate=force
+        force_regenerate=force_regenerate
     )
 
     if not result.get("success"):
