@@ -14,7 +14,9 @@ class Settings(BaseSettings):
     # Application
     app_name: str = "TubeVibe Library"
     app_env: str = "development"
-    debug: bool = True
+    # Off unless DEBUG=true is set. It turns on /docs, /redoc and
+    # /openapi.json, which list every route, so production must leave it off.
+    debug: bool = False
     log_level: str = "INFO"
 
     # API
@@ -43,6 +45,15 @@ class Settings(BaseSettings):
     google_client_secret: Optional[str] = None
     google_redirect_uri: str = "http://localhost:8000/api/auth/google/callback"
     extension_google_client_id: Optional[str] = None
+    # The public OAuth client ID that the dashboard (useAuth.ts) and the
+    # extension (authorizerClient.js) already use for Google sign-in. Google
+    # access tokens are accepted only when they were issued to one of
+    # google_client_id, extension_google_client_id or this ID. A client ID is
+    # public, so this default is not a secret. Set FIRST_PARTY_GOOGLE_CLIENT_ID
+    # to override it, or to an empty value to stop accepting it.
+    first_party_google_client_id: Optional[str] = (
+        "1049678014825-r2sgcffbksmm2jb8ikkdvdpfv23j8v7a.apps.googleusercontent.com"
+    )
 
     # Authorizer Integration
     authorizer_url: Optional[str] = None  # e.g., https://authorizer-tubevibe.up.railway.app

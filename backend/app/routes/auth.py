@@ -25,11 +25,6 @@ router = APIRouter()
 security = HTTPBearer()
 
 
-class GoogleIdTokenRequest(BaseModel):
-    """Request body for Google ID token verification"""
-    id_token: str
-
-
 class AuthorizerTokenRequest(BaseModel):
     """Request body for Authorizer token validation"""
     access_token: str
@@ -437,71 +432,105 @@ async def google_oauth(request: GoogleOAuthRequest):
     )
 
 
-@router.post("/google/verify", response_model=TokenResponse)
-async def verify_google_token(request: GoogleIdTokenRequest):
-    """
-    Verify Google ID token and authenticate user (used by Chrome extension).
-
-    The extension uses Chrome's identity API to get an ID token,
-    which is verified against Google's servers.
-    Returns JWT token for subsequent API calls.
-    """
-    auth_service = get_auth_service()
-
-    result = await auth_service.authenticate_extension(request.id_token)
-
-    if not result.get("success"):
-        raise HTTPException(status_code=401, detail=result.get("error"))
-
-    return TokenResponse(
-        access_token=result["access_token"],
-        token_type=result["token_type"],
-        expires_in=result["expires_in"],
-        user=UserResponse(**result["user"])
-    )
+# Shown to old extension builds, which send Google user data but no Google
+# access token. The extension displays this text as it is.
+GOOGLE_SIGN_IN_UPDATE_MESSAGE = (
+    "Google sign-in needs an update. Please update TubeVibe and sign in again."
+)
+GOOGLE_DETAILS_MISMATCH_MESSAGE = (
+    "Google sign-in could not be verified. Please sign in again."
+)
+GOOGLE_LINKED_ELSEWHERE_MESSAGE = (
+    "This Google account is linked to a different TubeVibe account. "
+    "Please contact support."
+)
 
 
 @router.post("/google/extension", response_model=TokenResponse)
 async def google_oauth_extension(request: GoogleUserDataRequest):
     """
-    Authenticate user with Google user data (used by Chrome extension).
+    Sign in with Google (used by the dashboard and the Chrome extension).
 
-    The extension gets Google user info via OAuth access token,
-    then sends the user data here for account creation/login.
-    This bypasses the code exchange flow since extensions can't
-    securely store client secrets.
+    The client sends the Google OAuth access token it received from Google.
+    The server asks Google who the token belongs to
+    (AuthService.verify_google_access_token) and uses only Google's answer
+    for the account id and email. Any google_id or email in the body must
+    match that answer, or the request is refused. Every failed check is a
+    401 and nothing is written to the database.
     """
     from app.services.email_service import get_email_service
+
+    # A request without a Google token proves nothing about who is calling.
+    if not request.access_token or not request.access_token.strip():
+        raise HTTPException(status_code=401, detail=GOOGLE_SIGN_IN_UPDATE_MESSAGE)
 
     auth_service = get_auth_service()
 
     if not auth_service.db:
         raise HTTPException(status_code=500, detail="Database service not available")
 
-    # Normalize email to lowercase for consistent matching
-    email = request.email.lower().strip()
+    verified = await auth_service.verify_google_access_token(request.access_token)
+    if not verified.get("success"):
+        raise HTTPException(
+            status_code=401,
+            detail=verified.get("error") or GOOGLE_DETAILS_MISMATCH_MESSAGE
+        )
+
+    # Identity comes only from Google. The email is already lowercased.
+    google_id = verified["google_id"]
+    email = verified["email"]
+
+    # Older clients also send what they believe the identity is. If they do,
+    # it must agree with Google, so a mismatch is treated as an attack.
+    if request.google_id is not None and request.google_id.strip() != google_id:
+        logger.warning("Google sign-in refused: body google_id differs from Google's answer")
+        raise HTTPException(status_code=401, detail=GOOGLE_DETAILS_MISMATCH_MESSAGE)
+    if request.email is not None and str(request.email).strip().lower() != email:
+        logger.warning("Google sign-in refused: body email differs from Google's answer")
+        raise HTTPException(status_code=401, detail=GOOGLE_DETAILS_MISMATCH_MESSAGE)
+
+    def _name(google_value, body_value):
+        # Names are display data, not identity, so the body may fill a gap.
+        if isinstance(google_value, str) and google_value.strip():
+            return google_value
+        return body_value or ""
+
+    first_name = _name(verified.get("given_name"), request.given_name)
+    last_name = _name(verified.get("family_name"), request.family_name)
 
     try:
         is_new_user = False
 
-        # Check if user exists by Google ID
-        user = await auth_service.db.get_user_by_google_id(request.google_id)
+        user = await auth_service.db.get_user_by_google_id(google_id)
 
-        if not user:
-            # Check by email (using normalized lowercase email)
+        if user:
+            # Before this fix, anyone could attach any google_id to any
+            # account. A record that carries this Google account's id but a
+            # different email may have been planted that way, so refuse it
+            # instead of signing in to it.
+            stored_email = (user.get("email") or "").strip().lower()
+            if stored_email != email:
+                logger.warning(
+                    "Google sign-in refused: the record linked to this Google "
+                    "account has a different email"
+                )
+                raise HTTPException(status_code=401, detail=GOOGLE_LINKED_ELSEWHERE_MESSAGE)
+        else:
             user = await auth_service.db.get_user_by_email(email)
 
             if user:
-                # Link Google account to existing user
-                await auth_service.db.update_user(user["id"], {"google_id": request.google_id})
+                # Link Google's verified id to the account with Google's
+                # verified email. This also replaces a google_id that was
+                # planted on this account through the old hole.
+                if user.get("google_id") != google_id:
+                    await auth_service.db.update_user(user["id"], {"google_id": google_id})
             else:
-                # Create new user
                 is_new_user = True
                 user = await auth_service.db.create_user(
-                    email=email,  # Use normalized email
-                    google_id=request.google_id,
-                    first_name=request.given_name or "",
-                    last_name=request.family_name or ""
+                    email=email,
+                    google_id=google_id,
+                    first_name=first_name,
+                    last_name=last_name
                 )
 
         if not user:
@@ -512,13 +541,12 @@ async def google_oauth_extension(request: GoogleUserDataRequest):
             try:
                 email_service = get_email_service()
                 await email_service.send_welcome_email(
-                    recipient_email=email,  # Use normalized email
-                    first_name=request.given_name
+                    recipient_email=email,
+                    first_name=first_name or None
                 )
             except Exception as e:
                 # Log but don't fail the auth if email fails
-                import logging
-                logging.getLogger(__name__).warning(f"Failed to send welcome email: {e}")
+                logger.warning(f"Failed to send welcome email: {type(e).__name__}")
 
         # Generate JWT tokens
         # access_token expires based on settings (default 7 days)
@@ -543,8 +571,10 @@ async def google_oauth_extension(request: GoogleUserDataRequest):
 
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Authentication failed: {str(e)}")
+    except Exception:
+        # Never send exception text to the caller.
+        logger.exception("Google sign-in failed after Google verified the token")
+        raise HTTPException(status_code=500, detail="Authentication failed. Please try again.")
 
 
 @router.get("/google/login")
@@ -974,64 +1004,6 @@ async def refresh_token(
     }
 
 
-@router.post("/admin/fix-test-user-videos")
-async def fix_test_user_videos(
-    user_id: str = Depends(get_current_user_id)
-):
-    """
-    One-time admin endpoint to reassign videos from test user to current user.
-    This fixes videos saved with TEST_MODE enabled.
-
-    IMPORTANT: Only run this once, then remove this endpoint.
-    """
-    from sqlalchemy import select, update, func
-    from app.services.database_service import VideoModel
-    import uuid
-
-    auth_service = get_auth_service()
-
-    if not auth_service.db:
-        raise HTTPException(status_code=500, detail="Database not available")
-
-    TEST_USER_ID = "00000000-0000-0000-0000-000000000001"
-
-    try:
-        # Count and update videos using SQLAlchemy
-        async with auth_service.db.get_session() as session:
-            # Count videos with test user ID
-            count_result = await session.execute(
-                select(func.count()).select_from(VideoModel).where(
-                    VideoModel.user_id == uuid.UUID(TEST_USER_ID)
-                )
-            )
-            test_video_count = count_result.scalar() or 0
-
-            if test_video_count == 0:
-                return {
-                    "success": True,
-                    "message": "No videos found with test user ID",
-                    "videos_updated": 0
-                }
-
-            # Update videos from test user to current authenticated user
-            from datetime import datetime
-            await session.execute(
-                update(VideoModel)
-                .where(VideoModel.user_id == uuid.UUID(TEST_USER_ID))
-                .values(user_id=uuid.UUID(user_id), updated_at=datetime.utcnow())
-            )
-
-        return {
-            "success": True,
-            "message": f"Successfully reassigned {test_video_count} videos from test user to your account",
-            "videos_updated": test_video_count,
-            "new_user_id": user_id
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fix videos: {str(e)}")
-
-
 @router.post("/admin/fix-pinecone-metadata")
 async def fix_pinecone_metadata(
     user_id: str = Depends(get_current_user_id)
@@ -1127,176 +1099,3 @@ async def fix_pinecone_metadata(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fix Pinecone metadata: {str(e)}")
-
-
-# =============================================================================
-# Diagnostic Endpoint - Test Authorizer Configuration
-# =============================================================================
-
-@router.get("/debug/authorizer-status")
-async def debug_authorizer_status():
-    """
-    Diagnostic endpoint to test Authorizer configuration and JWKS accessibility.
-    This helps debug "Invalid Authorizer token" errors.
-
-    Returns configuration status and JWKS test results.
-    """
-    import requests
-    settings = get_settings()
-
-    result = {
-        "authorizer_configured": bool(settings.authorizer_url),
-        "authorizer_url": settings.authorizer_url if settings.authorizer_url else "NOT SET",
-        "jwks_test": None,
-        "jwks_keys": []
-    }
-
-    if not settings.authorizer_url:
-        result["error"] = "AUTHORIZER_URL environment variable not set"
-        return result
-
-    # Test JWKS endpoint
-    jwks_url = f"{settings.authorizer_url.rstrip('/')}/.well-known/jwks.json"
-    result["jwks_url"] = jwks_url
-
-    try:
-        response = requests.get(jwks_url, timeout=10)
-        result["jwks_test"] = {
-            "status_code": response.status_code,
-            "accessible": response.ok
-        }
-
-        if response.ok:
-            data = response.json()
-            keys = data.get("keys", [])
-            result["jwks_keys"] = [
-                {"kid": k.get("kid"), "alg": k.get("alg"), "kty": k.get("kty")}
-                for k in keys
-            ]
-            result["message"] = f"JWKS accessible with {len(keys)} keys"
-        else:
-            result["error"] = f"JWKS returned {response.status_code}: {response.text[:200]}"
-
-    except Exception as e:
-        result["jwks_test"] = {"error": str(e), "accessible": False}
-        result["error"] = f"Failed to access JWKS: {str(e)}"
-
-    return result
-
-
-@router.post("/debug/validate-token")
-async def debug_validate_token(request: AuthorizerTokenRequest):
-    """
-    Diagnostic endpoint to test token validation and show detailed results.
-    This helps debug "Invalid Authorizer token" errors.
-
-    Returns detailed validation results including issuer comparison.
-    """
-    import jwt
-    settings = get_settings()
-
-    result = {
-        "token_provided": bool(request.access_token),
-        "authorizer_url": settings.authorizer_url
-    }
-
-    if not settings.authorizer_url:
-        result["error"] = "AUTHORIZER_URL not configured"
-        return result
-
-    if not request.access_token:
-        result["error"] = "No token provided"
-        return result
-
-    # Decode token without verification to see claims
-    try:
-        unverified = jwt.decode(request.access_token, options={"verify_signature": False})
-        result["token_claims"] = {
-            "sub": unverified.get("sub"),
-            "email": unverified.get("email"),
-            "iss": unverified.get("iss"),
-            "exp": unverified.get("exp"),
-            "iat": unverified.get("iat")
-        }
-
-        # Check issuer match
-        expected_issuer = settings.authorizer_url.rstrip('/')
-        token_issuer = unverified.get("iss", "").rstrip('/')
-        result["issuer_comparison"] = {
-            "expected": expected_issuer,
-            "token_has": token_issuer,
-            "match": expected_issuer == token_issuer
-        }
-
-        # Check expiration
-        import time
-        exp = unverified.get("exp")
-        if exp:
-            now = int(time.time())
-            result["expiration"] = {
-                "exp_timestamp": exp,
-                "current_timestamp": now,
-                "is_expired": now > exp,
-                "seconds_until_expiry": exp - now if exp > now else f"expired {now - exp}s ago"
-            }
-
-    except Exception as e:
-        result["decode_error"] = str(e)
-
-    # Try full verification with detailed error capture
-    authorizer_service = get_authorizer_service()
-
-    # First test JWKS fetching (using the service's method that handles missing kid)
-    try:
-        signing_key = authorizer_service._get_signing_key_from_jwks(request.access_token)
-        result["jwks_fetch"] = {
-            "status": "SUCCESS",
-            "key_id": getattr(signing_key, 'key_id', 'unknown'),
-            "algorithm": getattr(signing_key, '_algorithm', 'RS256'),
-            "note": "Using fallback for tokens without kid in header"
-        }
-
-        # Now try actual verification
-        expected_issuer = settings.authorizer_url.rstrip('/')
-        try:
-            verified_payload = jwt.decode(
-                request.access_token,
-                signing_key.key,
-                algorithms=["RS256"],
-                options={
-                    "verify_exp": True,
-                    "verify_aud": False,
-                    "verify_iss": True
-                },
-                issuer=expected_issuer
-            )
-            result["verification"] = "SUCCESS"
-            result["verified_claims"] = {
-                "sub": verified_payload.get("sub"),
-                "email": verified_payload.get("email")
-            }
-        except jwt.ExpiredSignatureError as e:
-            result["verification"] = "FAILED"
-            result["verification_error"] = f"ExpiredSignatureError: {str(e)}"
-        except jwt.InvalidIssuerError as e:
-            result["verification"] = "FAILED"
-            result["verification_error"] = f"InvalidIssuerError: {str(e)}"
-        except jwt.InvalidSignatureError as e:
-            result["verification"] = "FAILED"
-            result["verification_error"] = f"InvalidSignatureError: {str(e)}"
-        except jwt.DecodeError as e:
-            result["verification"] = "FAILED"
-            result["verification_error"] = f"DecodeError: {str(e)}"
-        except Exception as e:
-            result["verification"] = "FAILED"
-            result["verification_error"] = f"{type(e).__name__}: {str(e)}"
-
-    except Exception as e:
-        result["jwks_fetch"] = {
-            "status": "FAILED",
-            "error": f"{type(e).__name__}: {str(e)}"
-        }
-        result["verification"] = "FAILED"
-        result["verification_error"] = "JWKS fetch failed - cannot verify signature"
-
-    return result

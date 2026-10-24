@@ -136,6 +136,7 @@ class TestGoogleOAuth:
             mock_userinfo_response.json.return_value = {
                 "id": "google-user-123",
                 "email": "user@gmail.com",
+                "verified_email": True,
                 "given_name": "Test",
                 "family_name": "User"
             }

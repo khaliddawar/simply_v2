@@ -103,8 +103,11 @@ app = FastAPI(
     description="Personal video transcript library with RAG-powered search",
     version="1.0.0",
     lifespan=lifespan,
+    # All three follow DEBUG (off by default). Turning off only /docs and
+    # /redoc would still publish the full route list at /openapi.json.
     docs_url="/docs" if settings.debug else None,
-    redoc_url="/redoc" if settings.debug else None
+    redoc_url="/redoc" if settings.debug else None,
+    openapi_url="/openapi.json" if settings.debug else None
 )
 
 # Add rate limiting

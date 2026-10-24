@@ -78,9 +78,21 @@ class GoogleOAuthRequest(BaseModel):
 
 
 class GoogleUserDataRequest(BaseModel):
-    """Schema for Google OAuth with user data (used by Chrome extension)"""
-    google_id: str
-    email: EmailStr
+    """Body for POST /api/auth/google/extension (dashboard and extension).
+
+    access_token is the Google OAuth access token. The server checks it with
+    Google, and the account id and email come only from Google's answer.
+    It is optional here only so that old extension builds, which do not send
+    it, get a readable 401 from the route instead of a 422 validation error;
+    the route refuses every request without it.
+
+    google_id and email are still accepted from older clients, but they are
+    never trusted: if present, they must match what Google says, or the
+    request is refused.
+    """
+    access_token: Optional[str] = None
+    google_id: Optional[str] = None
+    email: Optional[EmailStr] = None
     name: Optional[str] = None
     given_name: Optional[str] = None
     family_name: Optional[str] = None

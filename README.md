@@ -180,6 +180,9 @@ tubevibe-library/
    - API Documentation: `http://localhost:8000/docs`
    - ReDoc: `http://localhost:8000/redoc`
 
+   These two pages and `/openapi.json` exist only when `DEBUG=true` is set
+   (see [API docs and DEBUG](#api-docs-and-debug)).
+
 ### Chrome Extension Setup
 
 1. **Navigate to extension directory**
@@ -229,7 +232,8 @@ Copy `.env.template` to `.env` and configure the following:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `APP_ENV` | Environment (development/staging/production) | development |
-| `DEBUG` | Enable debug mode | true |
+| `DEBUG` | Serve `/docs`, `/redoc` and `/openapi.json`. Leave unset in production | false |
+| `FIRST_PARTY_GOOGLE_CLIENT_ID` | Extra Google OAuth client ID accepted at sign-in. Defaults to the public client ID the dashboard and extension use; set it empty to stop accepting that ID | the built-in client ID |
 | `POSTMARK_API_KEY` | Postmark API key for emails | - |
 | `PADDLE_API_KEY` | Paddle API key for payments | - |
 | `PADDLE_ENVIRONMENT` | Paddle environment (sandbox/production) | sandbox |
@@ -237,6 +241,32 @@ Copy `.env.template` to `.env` and configure the following:
 | `ALLOW_NO_AUTH` | Skip auth for testing | false |
 
 See [.env.template](.env.template) for the complete list.
+
+### API docs and DEBUG
+
+`/docs`, `/redoc` and `/openapi.json` list every route, so they are off unless
+`DEBUG=true` is set. Leave `DEBUG` unset in production.
+
+When the dashboard is served (as in production), these three paths do not
+return a 404. The dashboard's catch-all route answers them with HTTP 200 and
+the body `{"detail":"Not Found"}`. The API schema is still not exposed. To
+check a deployment, look at the response body, not the status code:
+
+```bash
+curl -s https://<your-backend>/openapi.json
+# Expected: {"detail":"Not Found"}
+# If the output is a JSON schema starting with {"openapi": ...}, DEBUG is on.
+```
+
+### Google sign-in
+
+`POST /api/auth/google/extension` takes the Google OAuth access token that the
+dashboard or extension got from Google (`access_token` in the JSON body). The
+server checks the token with Google: it must have been issued to one of
+`GOOGLE_CLIENT_ID`, `EXTENSION_GOOGLE_CLIENT_ID` or
+`FIRST_PARTY_GOOGLE_CLIENT_ID`, and Google must report a verified email. The
+account id and email come only from Google's answer. A request without the
+token gets a 401 asking the user to update TubeVibe.
 
 ## API Endpoints
 
@@ -247,7 +277,7 @@ See [.env.template](.env.template) for the complete list.
 | POST | `/register` | Register new user with email/password |
 | POST | `/login` | Login with email/password |
 | POST | `/google` | Google OAuth (authorization code flow) |
-| POST | `/google/verify` | Verify Google ID token (Chrome extension) |
+| POST | `/google/extension` | Sign in with a Google access token (dashboard and Chrome extension) |
 | GET | `/google/login` | Initiate Google OAuth redirect |
 | GET | `/google/callback` | Google OAuth callback handler |
 | GET | `/me` | Get current user profile |

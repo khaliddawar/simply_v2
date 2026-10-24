@@ -335,6 +335,9 @@ class AuthorizerClient {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
+                    // The backend checks this token with Google and takes the
+                    // account id and email only from Google's answer.
+                    access_token: accessToken,
                     google_id: googleUser.id,
                     email: googleUser.email,
                     name: googleUser.name,

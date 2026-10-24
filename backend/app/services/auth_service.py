@@ -22,6 +22,45 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Google endpoints used to check a Google OAuth access token.
+# The token goes to tokeninfo in the POST body and to userinfo in the
+# Authorization header, never in a URL: httpx logs every request URL at INFO
+# level, and a logged token could be used to sign in as its owner.
+GOOGLE_TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo"
+GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
+GOOGLE_HTTP_TIMEOUT_SECONDS = 10.0
+
+
+def allowed_google_client_ids(settings) -> set:
+    """OAuth client IDs whose Google access tokens we accept.
+
+    Unset or blank values are dropped, so an empty setting can never match.
+    """
+    candidates = (
+        settings.google_client_id,
+        settings.extension_google_client_id,
+        settings.first_party_google_client_id,
+    )
+    return {
+        value.strip()
+        for value in candidates
+        if isinstance(value, str) and value.strip()
+    }
+
+
+def _is_true(value: Any) -> bool:
+    """Google sends email_verified as the boolean true (userinfo) or the
+    string "true" (tokeninfo). Anything else, including 1, counts as false."""
+    if value is True:
+        return True
+    return isinstance(value, str) and value.strip().lower() == "true"
+
+
+def _nonblank_str(value: Any) -> Optional[str]:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
 
 class AuthService:
     """Service for handling user authentication"""
@@ -301,11 +340,26 @@ class AuthService:
 
                 google_user = userinfo_response.json()
 
+            if not isinstance(google_user, dict):
+                return {
+                    "success": False,
+                    "error": "Failed to get user info from Google"
+                }
+
             # Extract user data from Google response
-            google_id = google_user.get("id")
-            email = google_user.get("email")
+            google_id = _nonblank_str(google_user.get("id"))
+            email = _nonblank_str(google_user.get("email"))
             first_name = google_user.get("given_name")
             last_name = google_user.get("family_name")
+
+            # The email links this sign-in to an existing account below, so
+            # it must be one Google has verified belongs to this user.
+            if not google_id or not email or not _is_true(google_user.get("verified_email")):
+                logger.warning("Google OAuth callback refused: no verified email in Google's answer")
+                return {
+                    "success": False,
+                    "error": "Google did not confirm this account's email address"
+                }
 
             # Check if user exists by Google ID
             user = await self.db.get_user_by_google_id(google_id)
@@ -363,117 +417,139 @@ class AuthService:
             logger.error(f"Error in Google OAuth callback: {e}")
             return {"success": False, "error": str(e)}
 
-    async def verify_google_id_token(self, id_token: str) -> Dict[str, Any]:
+    async def verify_google_access_token(
+        self,
+        access_token: Optional[str],
+        allowed_client_ids: Optional[set] = None,
+    ) -> Dict[str, Any]:
         """
-        Verify a Google ID token (used by Chrome extension).
+        Ask Google who a Google OAuth access token belongs to.
 
-        Args:
-            id_token: Google ID token from Chrome identity API
+        Used by POST /api/auth/google/extension (dashboard and extension).
+        Nothing the caller says about itself is trusted: the account id and
+        email returned here come only from Google's answers.
+
+        1. POST the token (in the body, never the URL) to tokeninfo. Require
+           HTTP 200, a JSON object, and aud or azp equal to one of our
+           client IDs, so a token issued to some other app is refused.
+        2. GET userinfo with the token as a Bearer header. Require HTTP 200,
+           a JSON object, the same sub as tokeninfo, an email, and
+           email_verified true. If tokeninfo also gave an email, it must
+           match.
+
+        Any timeout, connection error, non-200 answer, non-JSON body or
+        missing field returns success False. This function writes nothing.
 
         Returns:
-            Dict with user info if valid
+            {"success": True, "google_id", "email", "given_name",
+             "family_name", "name", "picture"} or
+            {"success": False, "error": <message safe to show the user>}
         """
-        try:
-            # Verify token with Google
-            verify_url = f"https://oauth2.googleapis.com/tokeninfo?id_token={id_token}"
+        refused = {
+            "success": False,
+            "error": "Google sign-in could not be verified. Please sign in again."
+        }
 
-            async with httpx.AsyncClient() as client:
-                response = await client.get(verify_url)
+        token = _nonblank_str(access_token)
+        if not token:
+            return refused
 
-                if response.status_code != 200:
-                    return {"success": False, "error": "Invalid ID token"}
-
-                token_info = response.json()
-
-            # Verify audience
-            if token_info.get("aud") not in [
-                self.google_client_id,
-                os.getenv("EXTENSION_GOOGLE_CLIENT_ID")
-            ]:
-                return {"success": False, "error": "Invalid token audience"}
-
-            return {
-                "success": True,
-                "google_id": token_info.get("sub"),
-                "email": token_info.get("email"),
-                "name": token_info.get("name"),
-                "picture": token_info.get("picture")
-            }
-
-        except Exception as e:
-            logger.error(f"Error verifying Google ID token: {e}")
-            return {"success": False, "error": str(e)}
-
-    async def authenticate_extension(self, id_token: str) -> Dict[str, Any]:
-        """
-        Authenticate Chrome extension user with Google ID token.
-        Creates user if needed, returns JWT token.
-
-        Args:
-            id_token: Google ID token from Chrome identity API
-
-        Returns:
-            Dict with user data and JWT token
-        """
-        if not self.db:
-            return {"success": False, "error": "Database service not available"}
+        if allowed_client_ids is None:
+            allowed_client_ids = allowed_google_client_ids(get_settings())
+        if not allowed_client_ids:
+            logger.error(
+                "Google sign-in refused: no Google OAuth client ID is configured"
+            )
+            return refused
 
         try:
-            # Verify the Google ID token
-            verify_result = await self.verify_google_id_token(id_token)
-
-            if not verify_result.get("success"):
-                return verify_result
-
-            google_id = verify_result["google_id"]
-            email = verify_result["email"]
-            name = verify_result.get("name", "")
-
-            # Parse first/last name
-            name_parts = name.split(" ", 1) if name else ["", ""]
-            first_name = name_parts[0]
-            last_name = name_parts[1] if len(name_parts) > 1 else ""
-
-            # Check if user exists
-            user = await self.db.get_user_by_google_id(google_id)
-
-            if not user:
-                # Check by email
-                user = await self.db.get_user_by_email(email)
-
-                if user:
-                    # Link Google account to existing user
-                    await self.db.update_user(user["id"], {"google_id": google_id})
-                else:
-                    # Create new user
-                    user = await self.db.create_user(
-                        email=email,
-                        google_id=google_id,
-                        first_name=first_name,
-                        last_name=last_name
+            async with httpx.AsyncClient(timeout=GOOGLE_HTTP_TIMEOUT_SECONDS) as client:
+                token_response = await client.post(
+                    GOOGLE_TOKENINFO_URL,
+                    data={"access_token": token},
+                )
+                if token_response.status_code != 200:
+                    logger.warning(
+                        f"Google sign-in refused: tokeninfo answered {token_response.status_code}"
                     )
+                    return refused
 
-            # Generate JWT token
-            jwt_token = self.create_access_token(user["id"])
+                token_info = token_response.json()
+                if not isinstance(token_info, dict):
+                    logger.warning("Google sign-in refused: tokeninfo answer is not an object")
+                    return refused
 
-            return {
-                "success": True,
-                "user": {
-                    "id": user["id"],
-                    "email": user["email"],
-                    "first_name": user["first_name"],
-                    "last_name": user["last_name"],
-                    "plan_type": user["plan_type"],
-                    "pinecone_namespace": user["pinecone_namespace"]
-                },
-                "access_token": jwt_token,
-                "token_type": "bearer",
-                "expires_in": self.access_token_expire_minutes * 60
-            }
+                audiences = {
+                    value for value in (token_info.get("aud"), token_info.get("azp"))
+                    if isinstance(value, str)
+                }
+                if not audiences & allowed_client_ids:
+                    logger.warning(
+                        "Google sign-in refused: token was issued to a client ID we do not accept"
+                    )
+                    return refused
+
+                token_sub = _nonblank_str(token_info.get("sub"))
+                if not token_sub:
+                    logger.warning("Google sign-in refused: tokeninfo gave no sub")
+                    return refused
+
+                if "email_verified" in token_info and not _is_true(token_info.get("email_verified")):
+                    logger.warning("Google sign-in refused: tokeninfo says the email is not verified")
+                    return refused
+
+                userinfo_response = await client.get(
+                    GOOGLE_USERINFO_URL,
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                if userinfo_response.status_code != 200:
+                    logger.warning(
+                        f"Google sign-in refused: userinfo answered {userinfo_response.status_code}"
+                    )
+                    return refused
+
+                user_info = userinfo_response.json()
+                if not isinstance(user_info, dict):
+                    logger.warning("Google sign-in refused: userinfo answer is not an object")
+                    return refused
 
         except Exception as e:
-            logger.error(f"Error authenticating extension user: {e}")
-            return {"success": False, "error": str(e)}
+            # Timeouts, connection errors and non-JSON bodies all land here.
+            # Log only the error type: nothing here should carry the token,
+            # but there is no reason to risk it.
+            logger.warning(f"Google sign-in refused: {type(e).__name__} while checking the token")
+            return refused
+
+        user_sub = _nonblank_str(user_info.get("sub"))
+        if not user_sub or user_sub != token_sub:
+            logger.warning("Google sign-in refused: tokeninfo and userinfo disagree on sub")
+            return refused
+
+        email = _nonblank_str(user_info.get("email"))
+        if not email:
+            logger.warning("Google sign-in refused: userinfo gave no email")
+            return refused
+        email = email.lower()
+
+        if not _is_true(user_info.get("email_verified")):
+            logger.warning("Google sign-in refused: Google has not verified this email")
+            return refused
+
+        token_email = token_info.get("email")
+        if token_email is not None:
+            if not isinstance(token_email, str) or token_email.strip().lower() != email:
+                logger.warning("Google sign-in refused: tokeninfo and userinfo disagree on email")
+                return refused
+
+        return {
+            "success": True,
+            "google_id": user_sub,
+            "email": email,
+            "given_name": user_info.get("given_name"),
+            "family_name": user_info.get("family_name"),
+            "name": user_info.get("name"),
+            "picture": user_info.get("picture"),
+        }
 
     async def get_current_user(self, token: str) -> Optional[Dict[str, Any]]:
         """
