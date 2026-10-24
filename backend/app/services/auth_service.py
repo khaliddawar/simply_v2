@@ -15,6 +15,8 @@ import httpx
 from jose import jwt, JWTError
 from passlib.context import CryptContext
 
+from app.settings import get_settings
+
 if TYPE_CHECKING:
     from app.services.database_service import DatabaseService
 
@@ -28,8 +30,13 @@ class AuthService:
         """Initialize Auth service"""
         self.pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-        # JWT settings
-        self.secret_key = os.getenv("JWT_SECRET_KEY", "development-secret-key")
+        # JWT settings.
+        # The signing key comes only from the required Settings.jwt_secret_key
+        # field (env JWT_SECRET_KEY). There is deliberately no fallback: a
+        # built-in default would be readable in this public repo, so anyone
+        # could forge tokens whenever the variable was missing. A missing or
+        # blank value now stops the app instead.
+        self.secret_key = get_settings().jwt_secret_key
         self.algorithm = os.getenv("JWT_ALGORITHM", "HS256")
         self.access_token_expire_minutes = int(
             os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "10080")

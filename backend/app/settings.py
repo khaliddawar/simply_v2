@@ -3,6 +3,7 @@ TubeVibe Library - Application Settings
 """
 import os
 from functools import lru_cache
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 from typing import Optional, List
 
@@ -28,6 +29,14 @@ class Settings(BaseSettings):
     jwt_secret_key: str
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 10080  # 7 days
+
+    @field_validator("jwt_secret_key")
+    @classmethod
+    def _jwt_secret_key_not_blank(cls, value: str) -> str:
+        # A blank key would let anyone sign tokens, same as having no key.
+        if not value or not value.strip():
+            raise ValueError("JWT_SECRET_KEY is set but blank; set it to a long random value")
+        return value
 
     # Google OAuth
     google_client_id: Optional[str] = None

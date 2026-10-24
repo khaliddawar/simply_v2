@@ -12,8 +12,13 @@ from unittest.mock import Mock, patch, AsyncMock
 from datetime import datetime, timedelta
 import os
 
-# Set test environment
+# Set test environment.
+# AuthService now reads the signing key from Settings, and Settings also
+# requires DATABASE_URL and PINECONE_API_KEY, so give those dummy values too.
+# Nothing in these tests connects to either.
 os.environ["JWT_SECRET_KEY"] = "test-secret-key-for-testing-only"
+os.environ["DATABASE_URL"] = "postgresql+asyncpg://test:test@localhost:5432/test"
+os.environ["PINECONE_API_KEY"] = "test-api-key"
 
 
 class TestAuthService:
@@ -170,3 +175,54 @@ class TestGoogleOAuth:
 
             assert result["success"] is False
             assert "error" in result
+
+
+class TestNoBuiltInSecrets:
+    """The repo is public, so it must not carry a usable signing key or an
+    admin password that works whenever an environment variable is unset."""
+
+    @pytest.fixture
+    def fresh_settings(self, monkeypatch, tmp_path):
+        from app.settings import get_settings
+
+        # Settings also reads ../.env. Run from an empty temp folder so a
+        # developer's real .env cannot hide a missing variable.
+        workdir = tmp_path / "backend"
+        workdir.mkdir()
+        monkeypatch.chdir(workdir)
+        get_settings.cache_clear()
+        yield monkeypatch
+        get_settings.cache_clear()
+
+    def test_missing_jwt_secret_refuses_to_start(self, fresh_settings):
+        from pydantic import ValidationError
+        from app.services.auth_service import AuthService
+
+        fresh_settings.delenv("JWT_SECRET_KEY", raising=False)
+        with pytest.raises(ValidationError):
+            AuthService()
+
+    def test_blank_jwt_secret_refuses_to_start(self, fresh_settings):
+        from pydantic import ValidationError
+        from app.services.auth_service import AuthService
+
+        fresh_settings.setenv("JWT_SECRET_KEY", "   ")
+        with pytest.raises(ValidationError):
+            AuthService()
+
+    def test_jwt_secret_comes_from_environment(self, fresh_settings):
+        from app.services.auth_service import AuthService
+
+        fresh_settings.setenv("JWT_SECRET_KEY", "value-set-by-this-test")
+        assert AuthService().secret_key == "value-set-by-this-test"
+
+    def test_temporary_admin_routes_are_gone(self):
+        from app.routes.auth import router
+
+        paths = {route.path for route in router.routes}
+        for removed in (
+            "/admin/reset-password",
+            "/admin/check-duplicate-users",
+            "/admin/merge-duplicate-users",
+        ):
+            assert removed not in paths
