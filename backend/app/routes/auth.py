@@ -141,6 +141,13 @@ async def register(user_data: UserCreate):
     auth_service = get_auth_service()
     email = user_data.email.lower().strip()
 
+    # Refuse an email that already has an account before touching Authorizer. With
+    # Authorizer configured, a new signup used to be linked to an existing record
+    # with the same email, which handed a password and a login token for
+    # Google-only accounts to whoever signed up with that address.
+    if auth_service.db and await auth_service.db.get_user_by_email(email):
+        raise HTTPException(status_code=400, detail="Email already registered. Please login instead.")
+
     # If Authorizer is configured, register there first for unified auth
     if settings.authorizer_url:
         try:

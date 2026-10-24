@@ -363,6 +363,15 @@ class AuthService:
 
             # Check if user exists by Google ID
             user = await self.db.get_user_by_google_id(google_id)
+            # A record linked to this Google id must have the same email: the old
+            # /google/extension hole could plant an attacker's Google id on a
+            # victim's record, and this path would then sign the attacker in.
+            if user and (user.get("email") or "").strip().lower() != email.lower():
+                logger.warning("Google OAuth callback refused: linked record has a different email")
+                return {
+                    "success": False,
+                    "error": "This Google account is linked to a different TubeVibe account. Please contact support."
+                }
             is_new_user = False
 
             if not user:

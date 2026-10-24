@@ -161,6 +161,23 @@ async def api_root():
     }
 
 
+def safe_static_file(root: Path, requested: str):
+    """Return the file inside `root` that `requested` names, or None.
+
+    The SPA catch-all used to serve `root / requested` as is, so "../", "%2e%2e/"
+    and "..%2f" (decoded to "../" before the route sees them) climbed out of the
+    dashboard folder and served any readable file on the server. Resolving and
+    checking containment refuses those, absolute paths and symlinks pointing out.
+    """
+    try:
+        candidate = (root / requested).resolve()
+        if candidate.is_relative_to(root.resolve()) and candidate.is_file():
+            return candidate
+    except (OSError, ValueError):
+        pass
+    return None
+
+
 # Serve dashboard static files
 # In production (Docker), dashboard is at /app/static/dashboard
 # In development, check for local build
@@ -195,9 +212,9 @@ if static_path and (static_path / "assets").exists():
         if full_path.startswith(("api/", "webhook/")) or full_path in ["health", "docs", "redoc", "openapi.json"]:
             return {"detail": "Not Found"}
 
-        # Check if it's a static file
-        file_path = static_path / full_path
-        if file_path.exists() and file_path.is_file():
+        # Check if it's a static file (inside the dashboard folder only)
+        file_path = safe_static_file(static_path, full_path)
+        if file_path is not None:
             return FileResponse(file_path)
 
         # Return index.html for SPA routing
